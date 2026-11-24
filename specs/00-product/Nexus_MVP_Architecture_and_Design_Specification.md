@@ -84,7 +84,7 @@ Do not implement real signal interception, surveillance, targeting, weapons, ope
 | UI | React + TypeScript (shadcn/ui + Tailwind, **Proposed**). Pages: New Investigation, Investigation Detail (timeline, tasks, findings, assessment, provenance drawer, retraction impact), Knowledge Explorer (minimal, read-only), System Health/About. Persistent "SYNTHETIC DATA" banner. |
 | Orchestrator | **One** FastAPI service combining the frontend API and a deterministic investigation workflow: an explicit state machine with SQLite persistence and an asyncio poller (**Proposed**, ADR-005, ADR-008). |
 | Agents | Three independent agent containers: SIGINT, GEOINT, Analysis. |
-| Agent protocol | **A2A-inspired** async task contract over HTTP, mapped 1:1 to A2A concepts (**Proposed**, ADR-004). |
+| Agent protocol | **A2A-inspired** async task contract over HTTP. It maps onto A2A v1.0.0 concepts, with documented deliberate divergences (ADR-004). |
 | Context Service | The only owner of the shared Relate store (embedded, in-process; ADR-001). Typed REST client for agents. |
 | Operational state | SQLite per service (orchestrator, each agent). Audit and idempotency records live in Relate, written in the same transaction (**Proposed**, ADR-002). |
 | LLM | OpenAI via a small provider abstraction. `ReplayLLMProvider`, clearly labelled, for tests and demo fallback (ADR-006). |
@@ -382,7 +382,7 @@ Packaging: a **uv workspace**. `contracts`, `shared` and each service are worksp
 
 ### 8.2 State machines
 
-There are two separate state machines. Transitions not listed are rejected by code and covered by unit tests.
+There are three enums: investigation state and **orchestrator task state** (both stored in orchestrator SQLite), and **agent task status** (stored by the agent and returned over the wire). Transitions not listed are rejected by code and covered by unit tests.
 
 **Investigation**
 
@@ -394,7 +394,7 @@ RUNNING | ANALYZING -> PARTIAL (budget_exceeded)
 any non-terminal -> FAILED | CANCELLED
 ```
 
-**Task**
+**Orchestrator task state** (what the orchestrator knows about a task, including things the agent can't know, such as `PENDING` and `TIMED_OUT`)
 
 ```text
 PENDING -> DISPATCHED -> RUNNING -> COMPLETED
@@ -407,6 +407,32 @@ Terminal task states are **sticky** in the orchestrator: once it records `CANCEL
 
 A task is identified by `task_id`; each dispatch of it is an **attempt** (`attempt` = 1, 2). Every task has at most two attempts.
 
+**Agent task status** (on the wire, per attempt; names match A2A v1.0.0 `TaskState`, ADR-004 C2)
+
+```text
+SUBMITTED -> WORKING -> COMPLETED
+                    \-> FAILED      (error.code: schema_invalid, llm_unavailable, evidence_integrity_error,
+                                     budget_exceeded, deadline_exceeded, agent_restarted, ...)
+SUBMITTED -> REJECTED               (refused at submit: unknown task_type, classification_ceiling above the agent's clearance)
+any non-terminal -> CANCELED
+```
+
+**Mapping from agent status (poll result) to orchestrator state:**
+
+| Agent status / poll outcome | Orchestrator task state |
+|---|---|
+| `SUBMITTED` | `DISPATCHED` |
+| `WORKING` | `RUNNING` |
+| `COMPLETED` | `COMPLETED` |
+| `FAILED (agent_restarted)` | `FAILED (agent_restarted)`, re-dispatchable |
+| `FAILED (other code)` | `FAILED (code)`, not re-dispatched |
+| `REJECTED` | `FAILED (task_rejected)`, not re-dispatched (a config error, not a transient one) |
+| `CANCELED` | `CANCELLED` |
+| `404` | `FAILED (task_lost)`, re-dispatchable |
+| Connection error / `5xx` / timeout | No change; keep polling until the deadline |
+
+Spelling: the wire enum uses A2A's `CANCELED`; orchestrator SQLite keeps `CANCELLED`. The mapping above is the only place where they meet.
+
 `WAITING_FOR_AGENT` is a **UI-derived** label: shown when a task is `DISPATCHED` and the agent's `/readyz` is failing. It is not a stored state.
 
 ### 8.3 Task execution model (ADR-003)
@@ -417,7 +443,7 @@ A task is identified by `task_id`; each dispatch of it is an **attempt** (`attem
   - same `task_id` and same `attempt` → returns the existing task (a safe network retry);
   - same `task_id` and a higher `attempt` → a re-dispatch. The agent cancels any earlier attempt that is still running (it may be a slow attempt the orchestrator already timed out), then starts the new one. Because both attempts share the batch idempotency key (§8.5), at most one of them can commit;
   - a lower `attempt` than the one stored → `409 stale_attempt`.
-- On restart, an agent marks **every** `RUNNING` task `FAILED (agent_restarted)`. No step is resumable in P0. The orchestrator then applies the re-dispatch rule.
+- On restart, an agent marks **every** `WORKING` task `FAILED (agent_restarted)`. No step is resumable in P0. The orchestrator then applies the re-dispatch rule.
 - **Poll outcomes** (ADR-003 B2, B7):
   - connection error, timeout or `5xx` → not a failure; keep polling until the deadline. Per-request timeouts: 2 s connect, 5 s read;
   - `404` for a task the orchestrator believes is `DISPATCHED` or `RUNNING` → `FAILED (task_lost)`, then the re-dispatch rule.
@@ -689,13 +715,15 @@ The frontend is served from the same origin (nginx in Compose, Vite proxy in dev
 
 | Method | Endpoint | A2A concept | Purpose |
 |---|---|---|---|
-| GET | `/.well-known/agent.json` | Agent Card | id, role, task_types, version, clearance |
+| GET | `/.well-known/agent-card.json` | Agent Card | id, role, task_types, version, clearance (A2A's well-known path; our own minimal card shape) |
 | POST | `/v1/tasks` | send message / create task | Submit a task → `202 {task_id, status}` |
 | GET | `/v1/tasks/{id}` | get task | Status + result |
 | POST | `/v1/tasks/{id}/cancel` | cancel task | Cancel |
 | GET | `/livez`, `/readyz` | — | Health |
 
-We do **not** claim A2A protocol compliance. The adapter in `apps/orchestrator/delegation/` isolates transport so the official A2A SDK can replace it (P1).
+We do **not** claim A2A protocol compliance. The adapter in `apps/orchestrator/delegation/` isolates transport so the official A2A SDK can replace it (P1). ADR-004 holds the mapping to A2A v1.0.0 and its **deliberate divergences**: orchestrator-generated task IDs (A2A generates them on the server), attempt/deadline/budget semantics (not in A2A), and flat results (A2A uses Artifacts).
+
+`POST /v1/tasks` returns `202` with status `SUBMITTED`, or `REJECTED` when the agent refuses the task by policy. A malformed body gets `422` (RFC 7807).
 
 **Task request**
 
@@ -1175,7 +1203,7 @@ A feature is done only when:
 | Graph store deployment | Relate embedded in the Context Service, single replica, write lane | Proposed — ADR-001 (confirm after S0 spike) |
 | Operational store | SQLite per service; audit + idempotency in Relate; create/close reconciliation | **Accepted** — ADR-002 (A1–A5) |
 | Task execution model | Async submit/poll; agent-persisted task state; fence-first cancel; idempotent single-call assessment | **Accepted** — ADR-003 (B1–B7, B9) |
-| A2A implementation | A2A-inspired HTTP contract behind an adapter | Proposed — ADR-004 |
+| A2A implementation | A2A-inspired HTTP contract behind an adapter; mapped to A2A v1.0.0 with documented divergences | **Accepted** — ADR-004 (C1–C3) |
 | Service topology | Gateway + coordinator merged into the orchestrator | Proposed — ADR-005 |
 | LLM test/demo substitute | Labelled `ReplayLLMProvider`, replay mode only | Proposed — ADR-006 |
 | AC13 restart recovery | Must (SQLite state tables + resume sweep) | Proposed |
@@ -1303,9 +1331,12 @@ Source: the v1.1 spec review on 24 Nov 2026. Gap IDs (G1–G9) refer to that rev
 | Spatial model | CRS unspecified | Cartesian points on the fictional grid; spike verifies `point.distance` + point index | §9.3, §18 |
 | Store hand-off (ADR-002 sign-off) | Crash between SQLite and Context Service writes undefined | `CREATED` resumable; idempotent create/close; `context_closed` reconciler; SQLite WAL + single writer | ADR-002 A1–A3 |
 | Task edges (ADR-003 sign-off) | Cancel order, poll 404, attempt deadline, agent-side deadline undefined; assessment and edges written by two non-idempotent calls | Fence-first cancel; sticky terminal states; `task_lost`; fresh attempt deadline; agent self-cancel; `/v1/relationships` folded into an idempotent `/v1/assessments` | ADR-003 B1–B7 |
+| A2A mapping (ADR-004 sign-off) | "Maps 1:1 to A2A"; one task enum mixing orchestrator and agent states; `/.well-known/agent.json` | Mapping table to A2A v1.0.0 with deliberate divergences; separate agent status enum using A2A names (+`REJECTED`); `/.well-known/agent-card.json` | ADR-004 C1–C3 |
 | S0 scope | 6 scenarios + spike + contracts + workspace in 3–4 d | 2 scenarios in S0; the other 4 are authored in S2/S4/S6; 4–5 d | §18 |
 
 **Parked (Good-to-have, not in v1.2):**
 - **G8:** create UNRESOLVED entities inline in the finding batch instead of a separate `POST /v1/entities` call (it removes a non-atomic step).
 - **ADR-003 B8:** before calling the LLM on a re-dispatch, the agent checks whether a submission already exists for the `task_id` and short-circuits (saves the duplicate LLM run). Build it if the S3 chaos tests show the cost matters.
+- **ADR-004 C4:** shape the Agent Card like A2A's (`name, description, supportedInterfaces, version, capabilities, defaultInputModes, defaultOutputModes, skills`), with clearance in an extension.
+- **ADR-004 C5:** rename cancel to `POST /v1/tasks/{id}:cancel` (A2A style, matches `findings:batch`).
 - **G9:** split the finding `status` into `lifecycle` + `review_flags[]`, or define a precedence between `DISPUTED` and `NEEDS_REVIEW`. Until then: `NEEDS_REVIEW` takes precedence over `DISPUTED`, and `SUPERSEDED` over both.
