@@ -42,6 +42,7 @@ Documented facts (vendor README/blog, Nov 2026; to be verified):
 3. 50 concurrent HTTP requests through the write lane: no corruption, no deadlock.
 4. `kill -9` during writes, then restart: every acknowledged transaction is present.
 5. `relate clone` backup restores correctly.
-6. Review `docs/limitations.md` against the queries for I1–I4 (quantified paths, `point.distance`).
+6. Review `docs/limitations.md` against the queries for I1–I4, and **run** the ADR-007 I4 sketch on seeded data: quantified paths, `EXISTS {}` subqueries with `MATCH … WHERE`, `[:A|B]` type alternation, cartesian `point.distance` with a point index, `datetime` comparison, `reduce`, map literals in `collect`.
+7. Composite-free scoping works: a unique constraint on `uid` for Entity/Evidence, and two investigations of the same scenario coexist.
 
 If criteria 1–4 fail: switch to Neo4j Community through `GraphRepository` and update this ADR.

@@ -267,7 +267,8 @@ Workflow:
 Deterministic code owns all state transitions. The LLM is not used by the orchestrator in P0.
 
 **Process rules (ADR-005 D1–D3):** one process runs the API, the SSE streams, the pollers, the resume sweep and the close reconciler.
-- Exactly **one uvicorn worker and one replica**. Background tasks start in the FastAPI `lifespan`. At startup the process takes a **leader lock** in SQLite (a `leader` row claimed in a `BEGIN IMMEDIATE` transaction, plus a heartbeat). A second process fails fast with `another orchestrator instance holds the leader lock`.
+- Exactly **one uvicorn worker and one replica**. Background tasks start in the FastAPI `lifespan`. At startup the process takes a **leader lock** in SQLite: a single `leader` row (`holder`, `heartbeat_at`) claimed in a `BEGIN IMMEDIATE` transaction, with a heartbeat every 5 s. If the row is held and its heartbeat is **fresher than 15 s**, the new process waits, re-checking until the heartbeat goes stale, and gives up with `another orchestrator instance holds the leader lock` after 30 s. A stale heartbeat (e.g. after `kill -9`) is taken over (ADR-008 F3).
+- **Startup order (ADR-008 F3):** leader lock → resume sweep → close reconciler → serve. The FastAPI `lifespan` finishes the first three before the server accepts requests, so no API call (e.g. a cancel) can arrive before resumed tasks are loaded. `/readyz` turns green only after this.
 - **No blocking I/O on the event loop:** SQLite goes through `aiosqlite` or the single dedicated writer thread (ADR-002 A3); HTTP goes through async `httpx`.
 - **SSE after commit:** timeline events are published to an in-process pub/sub (an asyncio queue per subscriber) only **after** their SQLite transaction commits. On connect, the stream replays `timeline_events` where `seq > Last-Event-ID`, then switches to live events, dropping duplicates by `seq`.
 
@@ -397,17 +398,23 @@ CREATED -> RUNNING -> ANALYZING -> COMPLETED
                   \            \-> PARTIAL
                    \-> PARTIAL (analysis skipped: policy not met)
 RUNNING | ANALYZING -> PARTIAL (budget_exceeded)
+RUNNING | ANALYZING -> PARTIAL (investigation_deadline)   if ≥1 specialist task COMPLETED
+CREATED | RUNNING   -> FAILED  (investigation_deadline)   if no specialist task COMPLETED
 any non-terminal -> FAILED | CANCELLED
 ```
+
+When the 10-minute investigation deadline fires, the orchestrator cancels every non-terminal task (the same fence-first order as §8.6, with no further dispatch) and applies the transition above (ADR-008 F6). An investigation that reaches its deadline in `ANALYZING` keeps its findings but has no assessment.
 
 **Orchestrator task state** (what the orchestrator knows about a task, including things the agent can't know, such as `PENDING` and `TIMED_OUT`)
 
 ```text
 PENDING -> DISPATCHED -> RUNNING -> COMPLETED
                                \-> FAILED
-DISPATCHED|RUNNING -> TIMED_OUT (deadline)    any non-terminal -> CANCELLED
-TIMED_OUT | FAILED(agent_restarted) | FAILED(task_lost) -> DISPATCHED   (single re-dispatch, attempt += 1, §8.5)
+PENDING|DISPATCHED|RUNNING -> TIMED_OUT (deadline)    any non-terminal -> CANCELLED
+TIMED_OUT | FAILED(agent_restarted) | FAILED(task_lost) -> PENDING   (single re-dispatch, attempt += 1, §8.5)
 ```
+
+**`PENDING` is the dispatch intent; `DISPATCHED` means acknowledged (ADR-008 F2).** The orchestrator commits the task as `PENDING` (with its `attempt`, deadline and token reservation), *then* calls `POST /v1/tasks`, and writes `DISPATCHED` plus `acked_at` only after the `202`. A crash between the two leaves the task `PENDING`; the resume sweep re-POSTs it with the **same** `attempt`, and the agent's `(task_id, attempt)` dedup returns the existing task. So a clean restart never burns the single re-dispatch.
 
 Terminal task states are **sticky** in the orchestrator: once it records `CANCELLED`, `COMPLETED` or a non-redispatchable `FAILED`, a later poll result never changes it. A late result is logged as a timeline event only.
 
@@ -452,7 +459,8 @@ Spelling: the wire enum uses A2A's `CANCELED`; orchestrator SQLite keeps `CANCEL
 - On restart, an agent marks **every** `WORKING` task `FAILED (agent_restarted)`. No step is resumable in P0. The orchestrator then applies the re-dispatch rule.
 - **Poll outcomes** (ADR-003 B2, B7):
   - connection error, timeout or `5xx` → not a failure; keep polling until the deadline. Per-request timeouts: 2 s connect, 5 s read;
-  - `404` for a task the orchestrator believes is `DISPATCHED` or `RUNNING` → `FAILED (task_lost)`, then the re-dispatch rule.
+  - `404` for a task that is `DISPATCHED` or `RUNNING` (so the agent acknowledged it earlier; `acked_at` is set) → `FAILED (task_lost)`, then the re-dispatch rule. `PENDING` tasks are never polled, so a never-delivered submission can't be mistaken for a lost task (ADR-008 F2).
+- **Concurrent writers (ADR-008 F4).** The poller, cancel, deadline timers and the reconciler can all update the same row. Every update is guarded by `version`. On a conflict the writer **re-reads the row and re-validates its transition** against the table. If the transition is no longer allowed (e.g. the task became `CANCELLED`), the update is dropped and a timeline note is written. Dispatching Analysis re-checks the investigation status in the same transaction that writes the Analysis task as `PENDING`.
 - **The agent also enforces the deadline** in the task request (ADR-003 B3): at `deadline + 5 s` grace it cancels its own run (asyncio cancellation of the in-flight LLM call), makes no commit, and marks the attempt `FAILED (deadline_exceeded)`. The orchestrator's timeout is authoritative; the agent-side one stops token spend and narrows the window for an attempt-1/attempt-2 race.
 - **Cancellation inside the agent** happens cooperatively at three points: before each LLM call, before the commit, and through asyncio cancellation of an in-flight LLM call. A commit that already started is not interrupted; the Context Service fence (§8.6) decides whether it lands.
 
@@ -469,7 +477,7 @@ Spelling: the wire enum uses A2A's `CANCELED`; orchestrator SQLite keeps `CANCEL
 | Agent → OpenAI | OpenAI client: transient errors / 429 honouring `retry-after` | 2 retries, 45 s per call |
 | Agent → schema validation | One repair call with concise validation feedback | 1 |
 | Agent → Context Service | HTTP retry on connect error/5xx, using the same idempotency key | 2 |
-| Orchestrator → agent | Re-dispatch a `TIMED_OUT` or `FAILED (agent_restarted)` task once, as `attempt = 2`, only if the agent is ready | 1 |
+| Orchestrator → agent | Re-dispatch a `TIMED_OUT`, `FAILED (agent_restarted)` or `FAILED (task_lost)` task once, as `attempt = 2`, only if the agent is ready | 1 |
 | Task deadline | Wall-clock, enforced by the orchestrator (authoritative) and by the agent (self-cancel, +5 s grace) | 180 s specialist, 240 s analysis. A re-dispatched attempt gets a **fresh** deadline: `min(now + task budget, investigation deadline)` |
 | Investigation deadline | Wall-clock | 10 min |
 
@@ -477,7 +485,7 @@ There is **one retry layer per hop**; layers are never nested.
 
 **Idempotency: one task, one commit.**
 - All findings from one task are submitted in **one batch** (`POST /v1/findings:batch`), written in **one transaction** under `idempotency_key = {task_id}`. Different attempts of the same task share the key, so at most one attempt's results are ever committed.
-- The Context Service stores the key and the batch content hash on a `Submission` node, protected by a unique constraint. Each committed Finding links to it (`(Submission)-[:COMMITTED]->(Finding)`).
+- The batch `content_hash` is computed over the canonical JSON of **every finding including its assertions and evidence refs** (sorted keys; assertions sorted by type, subject, object/location, `valid_from`). The Context Service stores the key and the hash on a `Submission` node, protected by a unique constraint. Each committed Finding links to it (`(Submission)-[:COMMITTED]->(Finding)`).
 - Replaying the same key with the same content hash returns the original finding IDs.
 - Replaying the same key with a different hash (a later attempt that produced different LLM output) returns `409 already_committed` along with the committed finding IDs. The agent reports those IDs as its result.
 - Why a batch: per-finding keys (`{task_id}:{ordinal}`, v1.1) could mix findings from two attempts when the LLM output differs between them.
@@ -485,9 +493,13 @@ There is **one retry layer per hop**; layers are never nested.
 **Assessment idempotency (ADR-003 B6):** `POST /v1/assessments` carries the assessment, its proposed edges and contradiction status changes, under `idempotency_key = {task_id}` on a `Submission` node, the same as the findings batch. Same key and same hash → original `assessment_id`; different hash → `409 already_committed` with the committed `assessment_id`. Edges that fail validation are rejected **individually** and listed in the response; they don't fail the whole assessment.
 
 **Token budget:**
-- Each task request carries a `token_budget`, which is what remains of `NEXUS_MAX_TOKENS_PER_INVESTIGATION` at dispatch time. The agent enforces it across its own calls; going over fails the task with `FAILED (budget_exceeded)`.
+- **Reservations, not "whatever remains" (ADR-008 F5).** SIGINT and GEOINT run concurrently, so handing each "what remains" would let real spend reach about twice the cap. Instead, the scenario template gives each task a `token_share` (default: SIGINT 0.25, GEOINT 0.25, Analysis 0.5). At dispatch:
+  - a specialist task's `token_budget` = `share × NEXUS_MAX_TOKENS_PER_INVESTIGATION`;
+  - Analysis gets everything not yet spent: `cap − Σ reported usage`, so unspent specialist budget flows to Analysis;
+  - attempt 2 of a task gets that task's reservation minus attempt 1's reported usage. If attempt 1's usage is unknown (agent crashed), it counts as 0, so the worst-case overshoot is bounded by one task's share. This is documented, not hidden.
+- The agent enforces its `token_budget` across its own calls; going over fails the task with `FAILED (budget_exceeded)`.
 - Each task result reports `usage` (input tokens, output tokens, LLM call count). The orchestrator adds these up.
-- The orchestrator checks the remaining budget **between tasks**. If nothing is left before Analysis, the investigation ends `PARTIAL (budget_exceeded)`. A model call that is already running is never cut off part-way.
+- The orchestrator checks the remaining budget **between tasks**. If what is left for Analysis is below a minimum (`NEXUS_MIN_ANALYSIS_TOKENS`, default 8000), the investigation ends `PARTIAL (budget_exceeded)`. A model call that is already running is never cut off part-way.
 
 ### 8.6 Cancellation and restart
 
@@ -498,7 +510,7 @@ There is **one retry layer per hop**; layers are never nested.
   4. marks those tasks `CANCELLED` (sticky, §8.2).
   - Anything committed **before** the fence stays in the graph. It belongs to a cancelled investigation and is shown as such; nothing is deleted.
   - Known window: if the Context Service is down during step 2 and comes back before the reconciler runs, an agent that ignored its cancel could still commit. This is accepted for the MVP; the chaos test asserts the reconciler closes the investigation within 30 s.
-- On orchestrator startup, a **resume sweep** loads every investigation in `CREATED`, `RUNNING` or `ANALYZING` from SQLite (a `CREATED` one re-runs the idempotent Context Service create, ADR-002 A1), together with its non-terminal tasks, and restarts their pollers. Deadlines are absolute timestamps, so a task whose deadline passed during the outage moves to `TIMED_OUT` straight away.
+- On orchestrator startup, a **resume sweep** loads every investigation in `CREATED`, `RUNNING` or `ANALYZING` from SQLite (a `CREATED` one re-runs the idempotent Context Service create, ADR-002 A1), together with its non-terminal tasks. It re-POSTs `PENDING` tasks with their stored `attempt` (ADR-008 F2) and restarts pollers for `DISPATCHED`/`RUNNING` ones. Deadlines are absolute timestamps, so a task (or investigation) whose deadline passed during the outage moves to `TIMED_OUT` (or applies the §8.2 deadline transition) straight away.
 - A **close reconciler** (at startup and every 30 s) retries `close` for every terminal investigation with `context_closed = false` (ADR-002 A2).
 - **Graceful shutdown (ADR-005 D5):** on SIGTERM the orchestrator stops accepting requests, closes SSE streams, cancels pollers and rolls back open transactions. It **changes no investigation or task state**; the resume sweep picks everything up on the next start.
 - Recovery across restarts is claimed only once the chaos tests pass (§17.3).
@@ -512,8 +524,9 @@ investigations(id PK, scenario_id, objective, status, status_reason,
                tokens_used, token_budget, deadline, assessment_id, context_closed,
                trace_context_json, created_at, updated_at, version)
 tasks(id PK, investigation_id FK, agent_id, task_type, status, status_reason,
-      attempt, deadline, finding_ids_json, usage_json, error_category,
-      error_code, created_at, updated_at, version)
+      attempt, deadline, token_reservation, acked_at, finding_ids_json,
+      usage_json, error_category, error_code, created_at, updated_at, version)
+leader(id INTEGER PK CHECK (id = 1), holder, heartbeat_at)   # ADR-005 D1, ADR-008 F3
 timeline_events(seq INTEGER PK AUTOINCREMENT, investigation_id, type,
                 payload_json, created_at)        # seq = SSE Last-Event-ID
 ```
@@ -521,7 +534,8 @@ timeline_events(seq INTEGER PK AUTOINCREMENT, investigation_id, type,
 - Each state change is **one SQLite transaction**: a status update, guarded by `version` (optimistic lock) and checked against the transition table, plus its `timeline_events` row.
 - SQLite settings (ADR-002 A3): WAL, `busy_timeout=5000`, one write connection behind an asyncio lock, separate read connections, no network call inside an open transaction.
 - One asyncio poller per active investigation. The poller is stateless; it reads and writes only through the repository.
-- A `WorkflowEngine` interface (`start`, `on_task_update`, `cancel`, `resume_all`) keeps the engine replaceable, e.g. with LangGraph in P1.
+- **Tracing (ADR-008 F9):** one span per **state transition**, not per poll. Poll requests are excluded from httpx auto-instrumentation. After a resume, new spans are linked to the stored `trace_context_json`, so a restarted investigation stays in one trace.
+- A `WorkflowEngine` interface (`start`, `on_task_update`, `cancel`, `resume_all`, `reconcile`) keeps the engine replaceable, e.g. with LangGraph in P1.
 - Large payloads never enter workflow state. `errors` hold a category and code only, never raw content.
 
 ## 9. Data model, graph and contracts
@@ -531,8 +545,8 @@ timeline_events(seq INTEGER PK AUTOINCREMENT, investigation_id, type,
 | Label | Meaning | Notes |
 |---|---|---|
 | `Investigation` | Objective and scenario container | Mirrors orchestrator metadata; lifecycle status lives in the orchestrator. Only a `write_state: OPEN / CLOSED` flag is held here, to reject late writes |
-| `Entity` | Fictional subject, handle, location, organization or asset | Canonical IDs come from the scenario manifest; `status: RESOLVED / UNRESOLVED`. `Location` entities (secondary label) are fictional grid cells with a cartesian `position` point |
-| `Evidence` | **Reference** to synthetic source material | id, sha256, owner_node_id, classification, short summary. **Never raw content.** `status: ACTIVE / RETRACTED` |
+| `Entity` | Fictional person, handle, location, organization or asset | **Scoped to one investigation** (ADR-007 G5): `uid = {investigation_id}:{manifest_id}` (unique), plus `manifest_id`, `investigation_id`, `type` (`PERSON | HANDLE | ORG | ASSET | LOCATION`). APIs and agents use the `manifest_id` within an investigation. `status: RESOLVED / UNRESOLVED`. `Location` entities (secondary label) are fictional grid cells with a cartesian `position` point at the cell centre |
+| `Evidence` | **Reference** to synthetic source material | Scoped like Entity (`uid = {investigation_id}:{manifest_id}`), so re-running a scenario never collides. sha256, owner_node_id, classification, short summary. **Never raw content.** `status: ACTIVE / RETRACTED` |
 | `Finding` | Normalized, attributable contribution | P0 folds "Observation" into Finding (`kind: OBSERVATION / INFERENCE`) |
 | `Assertion` | One structured fact claimed by a finding: `PLACED_AT` (entity at a location in a time window) or `LINKED_TO` (entity ↔ entity in a window) | Always owned by exactly one Finding, so provenance and retraction reach it (ADR-007). Its validity comes from the owning finding's status |
 | `Submission` | One committed batch of findings from one task | Holds `idempotency_key = task_id` and `content_hash` (§8.5) |
@@ -563,6 +577,8 @@ synthetic                 # always true in this MVP
 
 ```text
 (Investigation)-[:CONTAINS]->(Finding)
+(Investigation)-[:HAS_ENTITY]->(Entity)     # ADR-007 G5: entities are per investigation
+(Investigation)-[:HAS_EVIDENCE]->(Evidence)
 (Finding)-[:SUPPORTED_BY]->(Evidence)
 (Finding)-[:ABOUT]->(Entity)
 (Finding)-[:CORROBORATES]->(Finding)      # proposed by Analysis, validated by Context Service
@@ -582,12 +598,21 @@ synthetic                 # always true in this MVP
 
 **No fact-bearing edge exists between entities unless it comes from the manifest.** Everything an agent claims about entities (where something was, who contacted whom) is an `Assertion` owned by a Finding. A graph query only trusts an assertion while its finding is `ACTIVE` or `DISPUTED`. This is why retracting evidence (I2) also removes the facts that depend on it from I4. v1.1's `(Entity)-[:OBSERVED_AT]->(Location)` edge has been removed (ADR-007).
 
-`Assertion` properties: `id`, `type` (`PLACED_AT | LINKED_TO`), `valid_from`, `valid_until` (UTC), `link_type` (for `LINKED_TO`, e.g. `CONTACT`). The detector supplies the location and time window, and GEOINT snaps each observation to its grid cell deterministically. The LLM may only choose among candidates that the detector produced.
+`Assertion` properties: `id`, `type` (`PLACED_AT | LINKED_TO`), `valid_from`, `valid_until`, `link_type` (for `LINKED_TO`, e.g. `CONTACT`). The detector supplies the location and time window, and GEOINT snaps each observation to its grid cell deterministically. The LLM may only choose among candidates that the detector produced.
+
+**Assertion rules (ADR-007):**
+- **Who asserts what.** SIGINT asserts `LINKED_TO` between two `HANDLE` entities. GEOINT asserts `PLACED_AT` for a `PERSON` or `ASSET` at a `LOCATION`. Handles are tied to people only by the manifest (`(handle)-[:RELATED_TO {type:'USED_BY'}]->(person)`), never by an agent.
+- **Contact is symmetric.** A `LINKED_TO` with `link_type: CONTACT` is stored with `SUBJECT` = the handle with the lower `manifest_id` and `OBJECT` = the other, and queries match it undirected (`-[:SUBJECT|OBJECT]->`).
+- **Time.** `valid_from`/`valid_until` are stored as Cypher `datetime` in UTC (never strings), and windows are half-open `[from, until)`. Two windows overlap when `a.from < b.until AND b.from < a.until`. An assertion's window must lie inside its finding's `valid_from`/`valid_until`.
+- **Grid.** The manifest defines `grid: {origin, pitch, cols, rows}` in abstract units. Two placements are **co-located** when their cells are the same or one of the 8 neighbours: `point.distance(l1.position, l2.position) <= 1.5 × pitch` (diagonal neighbours sit at √2 × pitch ≈ 1.41).
+- **Validation (Context Service, per assertion):** subject, object and location exist in **this** investigation (`HAS_ENTITY`); entity types match the rule above; `AT` targets a `Location`; `subject ≠ object`; the subject is one of the finding's `ABOUT` entities; the window is valid and lies inside the finding's window.
+- **Provenance granularity.** Assertions inherit trust from their finding. Retracting one evidence item flags the **whole** finding, so every assertion on it drops out of I4, even ones another evidence item also supported. Per-assertion evidence links are P1.
 
 Schema bootstrap creates:
-- unique constraints on `id` for every label;
+- unique constraints on `id` for Finding, Assertion, Assessment, Decision, AuditEvent, Submission, Investigation; on `uid` for Entity and Evidence;
 - a unique constraint on `Submission.idempotency_key`;
-- indexes on `investigation_id` and `Assertion.type`;
+- indexes on `investigation_id`, `Entity.manifest_id`, `Assertion.type`;
+- every Finding and Assessment stores `classification_rank` (1 = DEMO-LOW … 3 = DEMO-HIGH), so clearance filters are numeric comparisons;
 - a point index on `Location.position`, using **cartesian** points (fictional grid, not WGS-84).
 
 Exact DDL syntax is confirmed in the S0 spike.
@@ -621,9 +646,9 @@ The `over-classified` scenario seeds a DEMO-HIGH finding. The Analysis retrieval
 | # | Demo moment | Endpoint | Query sketch | Priority |
 |---|---|---|---|---|
 | I1 | **Provenance trail:** conclusion → findings → evidence → agent | `GET /v1/assessments/{id}/provenance` | `MATCH p=(a:Assessment {id:$id})-[:USES_FINDING]->(f)-[:SUPPORTED_BY]->(e) RETURN p` | P0 |
-| I2 | **Evidence retraction impact:** mark evidence unreliable → every dependent finding, assertion and assessment, at any depth. Any hidden links (I4) that rested on those findings disappear | `POST /v1/evidence/{id}/retract` → returns the impact set | `MATCH (e:Evidence {id:$id})<-[:SUPPORTED_BY]-(f) OPTIONAL MATCH (f)<-[:DERIVED_FROM]-+(g) OPTIONAL MATCH (a:Assessment)-[:USES_FINDING]->(f) ...` (quantified path) | P0 |
-| I3 | **Contradiction neighbourhood** for an entity | `GET /v1/entities/{id}/contradictions` | `MATCH (f1)-[:ABOUT]->(x {id:$id})<-[:ABOUT]-(f2) WHERE (f1)-[:CONTRADICTS]-(f2) RETURN f1,f2` | P0 |
-| I4 | **Cross-agent hidden link:** SIGINT ties A to handle H, GEOINT places A at point P, and B was near P in the same window. Neither agent saw A↔B. | `GET /v1/investigations/{id}/links` | Two `PLACED_AT` assertions (A and B) whose locations satisfy `point.distance(...) < $r` with overlapping windows, plus a `LINKED_TO` assertion on A from a different agent; owning findings `ACTIVE`/`DISPUTED`; no existing A↔B assertion. Full sketch in ADR-007 | P0 |
+| I2 | **Evidence retraction impact:** mark evidence unreliable → every dependent finding, assertion and assessment, at any depth. Any hidden links (I4) that rested on those findings disappear | `POST /v1/investigations/{inv}/evidence/{evidence_id}/retract` → returns the impact set | `MATCH (e:Evidence {uid:$uid})<-[:SUPPORTED_BY]-(f) OPTIONAL MATCH (f)<-[:DERIVED_FROM]-+(g) OPTIONAL MATCH (a:Assessment)-[:USES_FINDING]->(f) ...` (quantified path) | P0 |
+| I3 | **Contradiction neighbourhood** for an entity | `GET /v1/investigations/{inv}/entities/{entity_id}/contradictions` | `MATCH (f1)-[:ABOUT]->(x:Entity {uid:$uid})<-[:ABOUT]-(f2) WHERE (f1)-[:CONTRADICTS]-(f2) RETURN f1,f2` | P0 |
+| I4 | **Cross-agent hidden path (ADR-007, story A):** SIGINT shows A's handle in contact with C's handle; GEOINT shows C co-located with B in the same window. **Path A → C → B**, with one hop from each agent, so neither agent alone has any A…B connection. | `GET /v1/investigations/{id}/links` | Undirected `LINKED_TO` between handles, resolved to people through manifest `USED_BY`; two `PLACED_AT` (C, B) in neighbouring cells with overlapping windows; owning findings trusted (status + clearance); no trusted direct A–B link of any kind. Returns path, cells, overlap window and a `disputed` flag. Full sketch in ADR-007 | P0 |
 | I5 | Graph-shaped retrieval for Analysis (bounded 2-hop subgraph instead of a flat list) | `GET /v1/investigations/{id}/context?shape=graph` | Capped expansion from investigation entities | P1 (stretch) |
 | I6 | Knowledge Explorer view | `GET /v1/investigations/{id}/graph` | Nodes and edges for one investigation, classification-filtered | P0 (minimal) |
 | I7 | "Why a graph" card: I1/I2/I4 in Cypher next to the SQL equivalent, plus Relate span latency | static + Tempo link | — | P1 |
@@ -669,10 +694,13 @@ All scenarios share a fictional region (a bounding box on an invented grid), fic
 ```text
 data/scenarios/<id>/manifest.yaml
   scenario_id, version, synthetic: true, template (tasks per agent), objective
-  entities:  [{id, type, display_name, aliases[]}]
+  grid:      {origin, pitch, cols, rows}          # fictional cartesian grid (ADR-007)
+  entities:  [{id, type, display_name, aliases[], position? (LOCATION), used_by? (HANDLE → PERSON)}]
   evidence:  [{id, owner_node, file, sha256, classification}]
   oracle:    expected finding kinds, expected corroboration/contradiction pairs,
-             expected hidden links, expected denials, canary strings
+             expected hidden paths [{a, via, b}], expected denials, canary strings
+             (baseline-corroboration must plant: hA USED_BY A, hC USED_BY C, SIGINT contact hA↔hC,
+              GEOINT C and B in neighbouring cells with overlapping windows, and no direct A–B link)
 data/fixtures/<node>/<id>/*.json     # mounted read-only into <node> ONLY
 data/replay/<id>/*.json              # recorded LLM responses for ReplayLLMProvider
 ```
@@ -710,8 +738,8 @@ Contracts are Pydantic models in `contracts/`. JSON Schema and OpenAPI files are
 | GET | `/api/v1/investigations/{id}/assessment` | Assessment |
 | GET | `/api/v1/investigations/{id}/graph` | Knowledge Explorer data (proxy I6) |
 | GET | `/api/v1/assessments/{id}/provenance` | Proxy I1 |
-| POST | `/api/v1/evidence/{id}/retract` | Proxy I2 (operator action) |
-| GET | `/api/v1/entities/{id}/contradictions` | Proxy I3 |
+| POST | `/api/v1/investigations/{id}/evidence/{evidence_id}/retract` | Proxy I2 (operator action) |
+| GET | `/api/v1/investigations/{id}/entities/{entity_id}/contradictions` | Proxy I3 |
 | GET | `/api/v1/investigations/{id}/links` | Proxy I4 |
 | POST | `/api/v1/investigations/{id}/cancel` | Cancel |
 | GET | `/api/v1/system/health` | Per-component status + overall `OK / DEGRADED / DOWN` |
@@ -785,8 +813,8 @@ We do **not** claim A2A protocol compliance. The adapter in `apps/orchestrator/d
 | POST | `/v1/search` | analysis | Structured filter: investigation, entity, kind, status, classification ≤ clearance. No free-text/vector in P0 |
 | POST | `/v1/assessments` | analysis | Persist assessment + `USES_FINDING` + proposed `CORROBORATES`/`CONTRADICTS`/`DERIVED_FROM` edges + contradiction statuses in **one transaction**, idempotent on `task_id`. ID validator re-checked server-side. (Replaces v1.1 `/v1/relationships`, ADR-003 B6) |
 | GET | `/v1/assessments/{id}/provenance` | orchestrator | I1 |
-| POST | `/v1/evidence/{id}/retract` | orchestrator (operator) | I2: mark RETRACTED, create Decision, flag NEEDS_REVIEW, return impact set |
-| GET | `/v1/entities/{id}/contradictions` | orchestrator | I3 |
+| POST | `/v1/investigations/{id}/evidence/{evidence_id}/retract` | orchestrator (operator) | I2: mark RETRACTED, create Decision, flag NEEDS_REVIEW, return impact set |
+| GET | `/v1/investigations/{id}/entities/{entity_id}/contradictions` | orchestrator | I3 |
 | GET | `/v1/investigations/{id}/links` | orchestrator | I4 |
 | GET | `/v1/investigations/{id}/graph` | orchestrator | I6 |
 | GET | `/v1/audit/{object_id}` | orchestrator | Permitted audit history |
@@ -1075,7 +1103,10 @@ These are estimates; measure actual use in slice S6. Retention: metrics 7 days, 
 | Agent unreachable during polling | Not a failure; polling continues until the deadline, then `TIMED_OUT` |
 | Agent run passes its deadline | Agent self-cancels at deadline + 5 s; no commit; orchestrator already marked `TIMED_OUT` |
 | Analysis crashes after commit, before ack | Re-dispatch → `409 already_committed` → committed `assessment_id` reported; no duplicate assessment |
-| Orchestrator restarts | Resume sweep reloads `RUNNING`/`ANALYZING` investigations from SQLite and restarts pollers; tasks whose deadline passed during the outage → `TIMED_OUT` |
+| Orchestrator restarts | Resume sweep reloads `CREATED`/`RUNNING`/`ANALYZING` investigations from SQLite, re-POSTs `PENDING` tasks (same attempt) and restarts pollers; tasks whose deadline passed during the outage → `TIMED_OUT` |
+| Orchestrator crashes between `PENDING` commit and agent `202` | Task stays `PENDING`; resume re-POSTs with the same `attempt`; agent dedup returns the existing task; no re-dispatch consumed |
+| Orchestrator `kill -9`, immediate restart | Leader heartbeat is still fresh; new process waits until it is stale (≤ 15 s), then takes over |
+| Investigation deadline (10 min) reached | Non-terminal tasks cancelled; `PARTIAL (investigation_deadline)` if ≥1 specialist completed, else `FAILED (investigation_deadline)` |
 | Slow attempt 1 completes after re-dispatch | Batch idempotency on `task_id`: whichever attempt commits first wins; the other gets `409 already_committed` and reports the committed IDs |
 | OpenAI timeout / 429 | Client retries per budget; then task `FAILED (llm_unavailable)`; never fake success |
 | Invalid model output | One repair; then `FAILED (schema_invalid)`; nothing persisted |
@@ -1137,7 +1168,7 @@ Estimates assume one experienced developer with an AI coding assistant. Re-estim
 
 | Slice | Content | Exit criterion | Est. |
 |---|---|---|---|
-| **S0 Decisions & data** | **Relate spike** (ADR-001 criteria, plus cartesian `point.distance` / point index, quantified paths, concurrent reads); ADR sign-off; Pydantic contracts (TaskRequest/Result with `attempt`/`usage`, FindingBatch with assertions, Assessment, errors) + schema generation + drift check; uv workspace skeleton; **2 scenarios only**: `baseline-corroboration` and `contradiction` (manifest, fixtures, oracle) + seeded generator | Spike report + accepted ADRs + 2 scenarios committed + `uv sync` / `make test` green | 4–5 d |
+| **S0 Decisions & data** | **Relate spike** (ADR-001 criteria 1–7, including running the ADR-007 I4 query on seeded data, plus concurrent reads); ADR sign-off; Pydantic contracts (TaskRequest/Result with `attempt`/`usage`, FindingBatch with assertions, Assessment, errors) + schema generation + drift check; uv workspace skeleton; **2 scenarios only**: `baseline-corroboration` and `contradiction` (manifest, fixtures, oracle) + seeded generator | Spike report + accepted ADRs + 2 scenarios committed + `uv sync` / `make test` green | 4–5 d |
 | **S1 Walking skeleton** | Orchestrator + Context Service (embedded Relate) + frontend shell; create investigation → Investigation node; SSE timeline; OTel traces across both services; Compose `lite`; `make` targets | AC1, AC2; trace across 2 services | 4–5 d |
 | **S2 First agent, real LLM** | SIGINT: task API, SQLite state, fixture hash check, detectors, OpenAI provider, validation + repair, idempotent `findings:batch` with assertions; replay recording (key per §13.2); **author `prompt-injection` scenario** | AC4 (SIGINT), AC5, AC17 | 5–6 d |
 | **S3 Second agent + failure paths** | GEOINT (point data, co-location detector); deadlines, `attempt`-based re-dispatch, partial policy, token budget, cancel, orchestrator resume sweep; chaos tests | AC3, AC12, AC13 | 5–6 d |
@@ -1227,8 +1258,8 @@ A feature is done only when:
 | Service topology | Gateway + coordinator merged into the orchestrator; single worker + leader lock; SSE after commit; operator actor header | **Accepted** — ADR-005 (D1–D5) |
 | LLM test/demo substitute | Labelled `ReplayLLMProvider`, replay mode only; finding aliases in prompts; oracle-gated recordings | **Accepted** — ADR-006 (E1–E8) |
 | AC13 restart recovery | Must (SQLite state tables + resume sweep) | Proposed |
-| Workflow engine | Deterministic state machine, no LangGraph in P0 | Proposed — ADR-008 |
-| Agent facts in the graph | Finding-owned `Assertion` nodes; no agent-written entity↔entity edges | Proposed — ADR-007 |
+| Workflow engine | Deterministic state machine, no LangGraph in P0; dispatch intent; stale-lock takeover; budget reservations; investigation deadline transition | **Accepted** — ADR-008 (F1–F9) |
+| Agent facts in the graph | Finding-owned `Assertion` nodes; per-investigation entities; I4 = two-hop cross-agent path | **Accepted** — ADR-007 (G1–G11) |
 | Finding idempotency | One batch per task, keyed by `task_id`; `attempt` on task requests | Proposed (v1.2, §8.5) |
 | Clearance-filter audit | `FILTERED` audit event with counts; 404 on direct over-clearance access | Proposed (v1.2, §9.5) |
 | UI component library | shadcn/ui + Tailwind | Proposed |
@@ -1263,7 +1294,7 @@ A feature is done only when:
 3. Create an investigation from `baseline-corroboration`.
 4. Watch the live timeline as the orchestrator delegates separate tasks.
 5. Findings appear, each with source agent, confidence band and classification.
-6. **Hidden link (I4):** the graph connects ENT-ALPHA to ENT-BRAVO via co-location, a link neither agent produced alone.
+6. **Hidden path (I4):** SIGINT saw ENT-ALPHA's handle contact ENT-CHARLIE's handle; GEOINT saw ENT-CHARLIE near ENT-BRAVO. The graph connects ENT-ALPHA → ENT-CHARLIE → ENT-BRAVO, a path neither agent had alone.
 7. Assessment → open the **provenance drawer (I1)** from a conclusion down to the evidence references.
 8. Run `contradiction`: both findings are kept, marked DISPUTED, and the assessment explains the confidence impact (I3).
 9. **Retract an evidence item (I2):** dependent findings and the assessment flip to NEEDS_REVIEW instantly.
@@ -1354,6 +1385,8 @@ Source: the v1.1 spec review on 24 Nov 2026. Gap IDs (G1–G9) refer to that rev
 | A2A mapping (ADR-004 sign-off) | "Maps 1:1 to A2A"; one task enum mixing orchestrator and agent states; `/.well-known/agent.json` | Mapping table to A2A v1.0.0 with deliberate divergences; separate agent status enum using A2A names (+`REJECTED`); `/.well-known/agent-card.json` | ADR-004 C1–C3 |
 | Orchestrator process (ADR-005 sign-off) | Concurrency inside the merged process unspecified; operator anonymous in the audit | One worker + SQLite leader lock; non-blocking I/O; SSE published after commit with replay-then-live; graceful shutdown changes no state; `X-Nexus-Actor` recorded on audit and Decision | ADR-005 D1–D5 |
 | Replay provider (ADR-006 sign-off) | Replayed Analysis output cited stale finding IDs; prompt edits without a version bump replayed silently; per-agent mode unreported | `F1…Fn` finding aliases in all prompts; `prompt_sha256` in the replay key; `llm_mode` reported and badge derived; objective locked; no runtime switch; oracle-gated recording; key scan | ADR-006 E1–E8 |
+| Graph model (ADR-007 review) | I4 required one entity to be both handle and person; link rested on GEOINT alone; entity IDs global | I4 = A —SIGINT→ C —GEOINT→ B via manifest `USED_BY`; symmetric contact; trusted-only "hidden" checks; per-investigation `uid` + `HAS_ENTITY`; grid-neighbour co-location; `datetime` half-open windows; assertion validation | ADR-007 G1–G11 |
+| Workflow engine (ADR-008 review) | Sweep missed `CREATED`; crash between dispatch and ack burned the re-dispatch; stale lock looped; concurrent tasks each got the full remaining budget; no investigation-deadline transition | `CREATED` resumed; `PENDING` = intent, `DISPATCHED` after ack; stale-heartbeat takeover + startup order; version-conflict re-validation; token reservations; deadline transitions; one span per transition | ADR-008 F1–F9 |
 | S0 scope | 6 scenarios + spike + contracts + workspace in 3–4 d | 2 scenarios in S0; the other 4 are authored in S2/S4/S6; 4–5 d | §18 |
 
 **Parked (Good-to-have, not in v1.2):**
