@@ -1,0 +1,14 @@
+# Architecture Decision Records — Nexus MVP
+
+| ADR | Title | Status |
+|---|---|---|
+| [ADR-001](ADR-001-graph-store-relate-embedded.md) | Graph store: Relate embedded in the Context Service | Proposed (confirm after S0 spike) |
+| [ADR-002](ADR-002-operational-state-and-audit.md) | Operational state: SQLite per service; audit + idempotency in Relate | Proposed |
+| [ADR-003](ADR-003-async-task-execution.md) | Task execution: async submit/poll with agent-persisted task state | Proposed |
+| [ADR-004](ADR-004-a2a-inspired-contract.md) | Agent contract: A2A-inspired HTTP contract behind an adapter | Proposed |
+| [ADR-005](ADR-005-service-topology.md) | Service topology: merged orchestrator (API + workflow) | Proposed |
+| [ADR-006](ADR-006-llm-replay-provider.md) | LLM substitute: labelled ReplayLLMProvider, replay mode only | Proposed |
+| [ADR-007](ADR-007-finding-owned-assertions.md) | Agent facts in the graph: finding-owned Assertion nodes | Proposed |
+| [ADR-008](ADR-008-p0-workflow-engine.md) | P0 workflow engine: deterministic state machine, no LangGraph | Proposed |
+
+Status values: Proposed → Accepted → Superseded. A Proposed ADR blocks the slice that depends on it until it is accepted.
