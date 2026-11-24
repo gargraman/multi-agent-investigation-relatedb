@@ -266,6 +266,11 @@ Workflow:
 
 Deterministic code owns all state transitions. The LLM is not used by the orchestrator in P0.
 
+**Process rules (ADR-005 D1–D3):** one process runs the API, the SSE streams, the pollers, the resume sweep and the close reconciler.
+- Exactly **one uvicorn worker and one replica**. Background tasks start in the FastAPI `lifespan`. At startup the process takes a **leader lock** in SQLite (a `leader` row claimed in a `BEGIN IMMEDIATE` transaction, plus a heartbeat). A second process fails fast with `another orchestrator instance holds the leader lock`.
+- **No blocking I/O on the event loop:** SQLite goes through `aiosqlite` or the single dedicated writer thread (ADR-002 A3); HTTP goes through async `httpx`.
+- **SSE after commit:** timeline events are published to an in-process pub/sub (an asyncio queue per subscriber) only **after** their SQLite transaction commits. On connect, the stream replays `timeline_events` where `seq > Last-Event-ID`, then switches to live events, dropping duplicates by `seq`.
+
 ### 6.3 Specialist agents (SIGINT, GEOINT)
 
 Each agent:
@@ -494,6 +499,7 @@ There is **one retry layer per hop**; layers are never nested.
   - Known window: if the Context Service is down during step 2 and comes back before the reconciler runs, an agent that ignored its cancel could still commit. This is accepted for the MVP; the chaos test asserts the reconciler closes the investigation within 30 s.
 - On orchestrator startup, a **resume sweep** loads every investigation in `CREATED`, `RUNNING` or `ANALYZING` from SQLite (a `CREATED` one re-runs the idempotent Context Service create, ADR-002 A1), together with its non-terminal tasks, and restarts their pollers. Deadlines are absolute timestamps, so a task whose deadline passed during the outage moves to `TIMED_OUT` straight away.
 - A **close reconciler** (at startup and every 30 s) retries `close` for every terminal investigation with `context_closed = false` (ADR-002 A2).
+- **Graceful shutdown (ADR-005 D5):** on SIGTERM the orchestrator stops accepting requests, closes SSE streams, cancels pollers and rolls back open transactions. It **changes no investigation or task state**; the resume sweep picks everything up on the next start.
 - Recovery across restarts is claimed only once the chaos tests pass (§17.3).
 
 ### 8.7 Workflow state (ADR-008)
@@ -530,7 +536,7 @@ timeline_events(seq INTEGER PK AUTOINCREMENT, investigation_id, type,
 | `Assertion` | One structured fact claimed by a finding: `PLACED_AT` (entity at a location in a time window) or `LINKED_TO` (entity ↔ entity in a window) | Always owned by exactly one Finding, so provenance and retraction reach it (ADR-007). Its validity comes from the owning finding's status |
 | `Submission` | One committed batch of findings from one task | Holds `idempotency_key = task_id` and `content_hash` (§8.5) |
 | `Assessment` | The Analysis Agent's synthesis | Holds conclusions, contradictions and gaps |
-| `Decision` | Operator disposition | P0: created only by evidence retraction (I2). Full workflow P1 |
+| `Decision` | Operator disposition | P0: created only by evidence retraction (I2). Records `actor` (e.g. `operator:demo`, ADR-005 D4). Full workflow P1 |
 | `AuditEvent` | Append-only audit record | Written in the same transaction as the operation |
 
 ### 9.2 Provenance fields
@@ -698,7 +704,7 @@ Contracts are Pydantic models in `contracts/`. JSON Schema and OpenAPI files are
 | GET | `/api/v1/investigations` | List (cursor) |
 | GET | `/api/v1/investigations/{id}` | Details including task states |
 | GET | `/api/v1/investigations/{id}/timeline` | Timeline events (cursor) |
-| GET | `/api/v1/investigations/{id}/events` | **SSE** stream; supports `Last-Event-ID` (timeline sequence number) |
+| GET | `/api/v1/investigations/{id}/events` | **SSE** stream; supports `Last-Event-ID` (timeline sequence number). Events are published only after commit; replay-then-live on connect (§6.2) |
 | GET | `/api/v1/investigations/{id}/findings` | Findings (proxied from the Context Service) |
 | GET | `/api/v1/investigations/{id}/assessment` | Assessment |
 | GET | `/api/v1/investigations/{id}/graph` | Knowledge Explorer data (proxy I6) |
@@ -906,6 +912,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4317
 | analysis-agent | context, search, assessments create (including edge proposals) | DEMO-MID |
 
 - The operator authenticates as a single local demo user (session cookie on the orchestrator).
+- **Operator identity reaches the audit (ADR-005 D4):** on operator-initiated calls (retract, and any later operator dispositions), the orchestrator sends `X-Nexus-Actor: operator:<user>` to the Context Service. The Context Service accepts the header **only together with the orchestrator's token**, ignores it from any other caller, and records it as `actor` on the `AuditEvent` and the `Decision`. `caller` stays `orchestrator`.
 - LLM output cannot grant permissions. The ID validator and the policy check run server-side.
 - Do not claim mTLS/PKI security unless implemented and tested.
 
@@ -931,7 +938,7 @@ The agents share `nexus-federation` and `nexus-context`, but they expose no inbo
 ### 14.4 Audit
 
 - Every mutating operation and every authorization denial writes an `AuditEvent` **in the same Relate transaction** as the operation (or alone, for denials).
-- An `AuditEvent` records caller ID, operation, target ID, timestamp, authorization outcome, result and trace ID.
+- An `AuditEvent` records caller ID, actor (the human operator, when present; ADR-005 D4), operation, target ID, timestamp, authorization outcome, result and trace ID.
 - `AuditEvent` nodes have no update or delete endpoint. They are append-only by API construction.
 - **Known deviation:** the audit lives in the same store as the data it audits. That is acceptable for a demo and documented in ADR-002. Production requires a separate tamper-evident store.
 
@@ -1204,7 +1211,7 @@ A feature is done only when:
 | Operational store | SQLite per service; audit + idempotency in Relate; create/close reconciliation | **Accepted** — ADR-002 (A1–A5) |
 | Task execution model | Async submit/poll; agent-persisted task state; fence-first cancel; idempotent single-call assessment | **Accepted** — ADR-003 (B1–B7, B9) |
 | A2A implementation | A2A-inspired HTTP contract behind an adapter; mapped to A2A v1.0.0 with documented divergences | **Accepted** — ADR-004 (C1–C3) |
-| Service topology | Gateway + coordinator merged into the orchestrator | Proposed — ADR-005 |
+| Service topology | Gateway + coordinator merged into the orchestrator; single worker + leader lock; SSE after commit; operator actor header | **Accepted** — ADR-005 (D1–D5) |
 | LLM test/demo substitute | Labelled `ReplayLLMProvider`, replay mode only | Proposed — ADR-006 |
 | AC13 restart recovery | Must (SQLite state tables + resume sweep) | Proposed |
 | Workflow engine | Deterministic state machine, no LangGraph in P0 | Proposed — ADR-008 |
@@ -1332,6 +1339,7 @@ Source: the v1.1 spec review on 24 Nov 2026. Gap IDs (G1–G9) refer to that rev
 | Store hand-off (ADR-002 sign-off) | Crash between SQLite and Context Service writes undefined | `CREATED` resumable; idempotent create/close; `context_closed` reconciler; SQLite WAL + single writer | ADR-002 A1–A3 |
 | Task edges (ADR-003 sign-off) | Cancel order, poll 404, attempt deadline, agent-side deadline undefined; assessment and edges written by two non-idempotent calls | Fence-first cancel; sticky terminal states; `task_lost`; fresh attempt deadline; agent self-cancel; `/v1/relationships` folded into an idempotent `/v1/assessments` | ADR-003 B1–B7 |
 | A2A mapping (ADR-004 sign-off) | "Maps 1:1 to A2A"; one task enum mixing orchestrator and agent states; `/.well-known/agent.json` | Mapping table to A2A v1.0.0 with deliberate divergences; separate agent status enum using A2A names (+`REJECTED`); `/.well-known/agent-card.json` | ADR-004 C1–C3 |
+| Orchestrator process (ADR-005 sign-off) | Concurrency inside the merged process unspecified; operator anonymous in the audit | One worker + SQLite leader lock; non-blocking I/O; SSE published after commit with replay-then-live; graceful shutdown changes no state; `X-Nexus-Actor` recorded on audit and Decision | ADR-005 D1–D5 |
 | S0 scope | 6 scenarios + spike + contracts + workspace in 3–4 d | 2 scenarios in S0; the other 4 are authored in S2/S4/S6; 4–5 d | §18 |
 
 **Parked (Good-to-have, not in v1.2):**
@@ -1339,4 +1347,5 @@ Source: the v1.1 spec review on 24 Nov 2026. Gap IDs (G1–G9) refer to that rev
 - **ADR-003 B8:** before calling the LLM on a re-dispatch, the agent checks whether a submission already exists for the `task_id` and short-circuits (saves the duplicate LLM run). Build it if the S3 chaos tests show the cost matters.
 - **ADR-004 C4:** shape the Agent Card like A2A's (`name, description, supportedInterfaces, version, capabilities, defaultInputModes, defaultOutputModes, skills`), with clearance in an extension.
 - **ADR-004 C5:** rename cancel to `POST /v1/tasks/{id}:cancel` (A2A style, matches `findings:batch`).
+- **ADR-005 D6:** enforce the `api/` ↔ `workflow/` boundary with an `import-linter` contract (`api` uses only `WorkflowEngine`; `workflow` never imports `api`).
 - **G9:** split the finding `status` into `lifecycle` + `review_flags[]`, or define a precedence between `DISPUTED` and `NEEDS_REVIEW`. Until then: `NEEDS_REVIEW` takes precedence over `DISPUTED`, and `SUPERSEDED` over both.
