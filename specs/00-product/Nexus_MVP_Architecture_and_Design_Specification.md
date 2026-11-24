@@ -285,7 +285,7 @@ Each agent:
 ### 6.4 Analysis Agent
 
 - Retrieves authorized findings and entity context for the investigation. Classification filtering is done by the Context Service, not the agent.
-- Identifies corroboration and contradiction, and **proposes** `CORROBORATES` / `CONTRADICTS` edges. The Context Service validates and writes them.
+- Identifies corroboration and contradiction, and **proposes** `CORROBORATES` / `CONTRADICTS` / `DERIVED_FROM` edges **inside its assessment submission**. The Context Service validates them and writes them in the same transaction as the assessment (ADR-003 B6).
 - Separates observation from inference.
 - Creates a structured assessment with confidence (number plus band), rationale, gaps and follow-up questions.
 - References exact finding IDs. A **deterministic validator** rejects any assessment that cites a finding ID not present in the retrieval result of that run (anti-hallucination guardrail).
@@ -375,8 +375,8 @@ Packaging: a **uv workspace**. `contracts`, `shared` and each service are worksp
 10. The orchestrator polls tasks until all are terminal or the deadline passes.
 11. The orchestrator applies the partial policy (§8.4), then submits the Analysis task. Investigation → `ANALYZING`.
 12. The Analysis agent retrieves authorized context (`POST /v1/search`, `GET /v1/investigations/{id}/context`).
-13. The Analysis agent drafts the assessment and proposes relationship edges. The ID validator runs.
-14. The Context Service persists the assessment, `USES_FINDING` edges, validated edges and contradiction statuses.
+13. The Analysis agent drafts the assessment, including its proposed relationship edges. The ID validator runs.
+14. The agent calls `POST /v1/assessments` once. The Context Service persists the assessment, `USES_FINDING` edges, validated proposed edges, contradiction statuses and the audit node in **one transaction**, idempotent on `task_id`.
 15. The orchestrator marks the investigation `COMPLETED`, `PARTIAL` or `FAILED`.
 16. Every transition emits a timeline event (SQLite) and the UI receives it over SSE.
 
@@ -400,8 +400,10 @@ any non-terminal -> FAILED | CANCELLED
 PENDING -> DISPATCHED -> RUNNING -> COMPLETED
                                \-> FAILED
 DISPATCHED|RUNNING -> TIMED_OUT (deadline)    any non-terminal -> CANCELLED
-TIMED_OUT | FAILED(agent_restarted) -> DISPATCHED   (single orchestrator re-dispatch, attempt += 1, §8.5)
+TIMED_OUT | FAILED(agent_restarted) | FAILED(task_lost) -> DISPATCHED   (single re-dispatch, attempt += 1, §8.5)
 ```
+
+Terminal task states are **sticky** in the orchestrator: once it records `CANCELLED`, `COMPLETED` or a non-redispatchable `FAILED`, a later poll result never changes it. A late result is logged as a timeline event only.
 
 A task is identified by `task_id`; each dispatch of it is an **attempt** (`attempt` = 1, 2). Every task has at most two attempts.
 
@@ -415,7 +417,12 @@ A task is identified by `task_id`; each dispatch of it is an **attempt** (`attem
   - same `task_id` and same `attempt` → returns the existing task (a safe network retry);
   - same `task_id` and a higher `attempt` → a re-dispatch. The agent cancels any earlier attempt that is still running (it may be a slow attempt the orchestrator already timed out), then starts the new one. Because both attempts share the batch idempotency key (§8.5), at most one of them can commit;
   - a lower `attempt` than the one stored → `409 stale_attempt`.
-- On restart, an agent marks its own `RUNNING` tasks as `FAILED (agent_restarted)` unless the step is safe to resume. The orchestrator then applies the re-dispatch rule.
+- On restart, an agent marks **every** `RUNNING` task `FAILED (agent_restarted)`. No step is resumable in P0. The orchestrator then applies the re-dispatch rule.
+- **Poll outcomes** (ADR-003 B2, B7):
+  - connection error, timeout or `5xx` → not a failure; keep polling until the deadline. Per-request timeouts: 2 s connect, 5 s read;
+  - `404` for a task the orchestrator believes is `DISPATCHED` or `RUNNING` → `FAILED (task_lost)`, then the re-dispatch rule.
+- **The agent also enforces the deadline** in the task request (ADR-003 B3): at `deadline + 5 s` grace it cancels its own run (asyncio cancellation of the in-flight LLM call), makes no commit, and marks the attempt `FAILED (deadline_exceeded)`. The orchestrator's timeout is authoritative; the agent-side one stops token spend and narrows the window for an attempt-1/attempt-2 race.
+- **Cancellation inside the agent** happens cooperatively at three points: before each LLM call, before the commit, and through asyncio cancellation of an in-flight LLM call. A commit that already started is not interrupted; the Context Service fence (§8.6) decides whether it lands.
 
 ### 8.4 Partial-completion policy
 
@@ -431,7 +438,7 @@ A task is identified by `task_id`; each dispatch of it is an **attempt** (`attem
 | Agent → schema validation | One repair call with concise validation feedback | 1 |
 | Agent → Context Service | HTTP retry on connect error/5xx, using the same idempotency key | 2 |
 | Orchestrator → agent | Re-dispatch a `TIMED_OUT` or `FAILED (agent_restarted)` task once, as `attempt = 2`, only if the agent is ready | 1 |
-| Task deadline | Wall-clock, enforced by the orchestrator | 180 s specialist, 240 s analysis |
+| Task deadline | Wall-clock, enforced by the orchestrator (authoritative) and by the agent (self-cancel, +5 s grace) | 180 s specialist, 240 s analysis. A re-dispatched attempt gets a **fresh** deadline: `min(now + task budget, investigation deadline)` |
 | Investigation deadline | Wall-clock | 10 min |
 
 There is **one retry layer per hop**; layers are never nested.
@@ -443,6 +450,8 @@ There is **one retry layer per hop**; layers are never nested.
 - Replaying the same key with a different hash (a later attempt that produced different LLM output) returns `409 already_committed` along with the committed finding IDs. The agent reports those IDs as its result.
 - Why a batch: per-finding keys (`{task_id}:{ordinal}`, v1.1) could mix findings from two attempts when the LLM output differs between them.
 
+**Assessment idempotency (ADR-003 B6):** `POST /v1/assessments` carries the assessment, its proposed edges and contradiction status changes, under `idempotency_key = {task_id}` on a `Submission` node, the same as the findings batch. Same key and same hash → original `assessment_id`; different hash → `409 already_committed` with the committed `assessment_id`. Edges that fail validation are rejected **individually** and listed in the response; they don't fail the whole assessment.
+
 **Token budget:**
 - Each task request carries a `token_budget`, which is what remains of `NEXUS_MAX_TOKENS_PER_INVESTIGATION` at dispatch time. The agent enforces it across its own calls; going over fails the task with `FAILED (budget_exceeded)`.
 - Each task result reports `usage` (input tokens, output tokens, LLM call count). The orchestrator adds these up.
@@ -451,9 +460,12 @@ There is **one retry layer per hop**; layers are never nested.
 ### 8.6 Cancellation and restart
 
 - `POST /api/v1/investigations/{id}/cancel`:
-  - marks the investigation `CANCELLED`;
-  - calls `POST /v1/tasks/{id}/cancel` on every non-terminal task;
-  - tells the Context Service to reject further writes for that investigation (`POST /v1/investigations/{id}/close`), so late results get `409 investigation_cancelled`. If that call fails, `context_closed` stays false and the reconciler retries it (ADR-002 A2).
+  1. marks the investigation `CANCELLED` in SQLite (`context_closed = false`);
+  2. **fences writes first:** calls Context Service `POST /v1/investigations/{id}/close`, so every later write gets `409 investigation_cancelled` (ADR-003 B1). If that call fails, the reconciler retries it (ADR-002 A2);
+  3. only then calls `POST /v1/tasks/{id}/cancel` on every non-terminal task, whether or not step 2 succeeded, so agents stop spending tokens;
+  4. marks those tasks `CANCELLED` (sticky, §8.2).
+  - Anything committed **before** the fence stays in the graph. It belongs to a cancelled investigation and is shown as such; nothing is deleted.
+  - Known window: if the Context Service is down during step 2 and comes back before the reconciler runs, an agent that ignored its cancel could still commit. This is accepted for the MVP; the chaos test asserts the reconciler closes the investigation within 30 s.
 - On orchestrator startup, a **resume sweep** loads every investigation in `CREATED`, `RUNNING` or `ANALYZING` from SQLite (a `CREATED` one re-runs the idempotent Context Service create, ADR-002 A1), together with its non-terminal tasks, and restarts their pollers. Deadlines are absolute timestamps, so a task whose deadline passed during the outage moves to `TIMED_OUT` straight away.
 - A **close reconciler** (at startup and every 30 s) retries `close` for every terminal investigation with `context_closed = false` (ADR-002 A2).
 - Recovery across restarts is claimed only once the chaos tests pass (§17.3).
@@ -566,7 +578,7 @@ The `over-classified` scenario seeds a DEMO-HIGH finding. The Analysis retrieval
 
 **How the exclusion is audited (v1.2).** Retrieval *filters* records; nobody requests the hidden finding by ID, so there is no request to deny. To make AC18 testable:
 - every read endpoint that applies a clearance filter (`/search`, `/context`, `/graph`) writes one `AuditEvent` per call, with `outcome: FILTERED` and `filtered_above_clearance: <count>` whenever the count is > 0. It records **counts only**, never the IDs of the hidden records (that would leak their existence in detail);
-- a direct request by ID for an object above the caller's clearance (e.g. `GET /v1/audit/{id}` or a relationship proposal naming it) gets `404`, not `403`, so its existence isn't revealed. It writes an `AuditEvent` with `outcome: DENIED`;
+- a direct request by ID for an object above the caller's clearance (e.g. `GET /v1/audit/{id}` or an assessment's edge proposal naming it) gets `404`, not `403`, so its existence isn't revealed. It writes an `AuditEvent` with `outcome: DENIED`;
 - AC18 passes when the Analysis context omits the finding **and** a `FILTERED` audit event with `filtered_above_clearance ≥ 1` exists for that call.
 
 ## 10. Demonstrating the value of the graph
@@ -734,9 +746,8 @@ We do **not** claim A2A protocol compliance. The adapter in `apps/orchestrator/d
 | POST | `/v1/investigations/{id}/close` | orchestrator | Mark cancelled/closed; reject further writes. Idempotent (ADR-002 A2) |
 | POST | `/v1/findings:batch` | sigint, geoint | Submit **all** findings of one task (evidence refs, `ABOUT` edges, assertions) in one transaction, idempotent on `task_id` (§8.5) |
 | POST | `/v1/entities` | sigint, geoint | Create an UNRESOLVED entity |
-| POST | `/v1/relationships` | analysis | Propose CORROBORATES / CONTRADICTS / DERIVED_FROM (validated) |
 | POST | `/v1/search` | analysis | Structured filter: investigation, entity, kind, status, classification ≤ clearance. No free-text/vector in P0 |
-| POST | `/v1/assessments` | analysis | Persist assessment + USES_FINDING (ID validator re-checked server-side) |
+| POST | `/v1/assessments` | analysis | Persist assessment + `USES_FINDING` + proposed `CORROBORATES`/`CONTRADICTS`/`DERIVED_FROM` edges + contradiction statuses in **one transaction**, idempotent on `task_id`. ID validator re-checked server-side. (Replaces v1.1 `/v1/relationships`, ADR-003 B6) |
 | GET | `/v1/assessments/{id}/provenance` | orchestrator | I1 |
 | POST | `/v1/evidence/{id}/retract` | orchestrator (operator) | I2: mark RETRACTED, create Decision, flag NEEDS_REVIEW, return impact set |
 | GET | `/v1/entities/{id}/contradictions` | orchestrator | I3 |
@@ -864,7 +875,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4317
 | orchestrator | investigations create/close/context, provenance, retract, contradictions, links, graph, audit | DEMO-HIGH (operator view) |
 | sigint-agent | findings submit, entities create | DEMO-HIGH (own findings only) |
 | geoint-agent | findings submit, entities create | DEMO-MID |
-| analysis-agent | context, search, relationships propose, assessments create | DEMO-MID |
+| analysis-agent | context, search, assessments create (including edge proposals) | DEMO-MID |
 
 - The operator authenticates as a single local demo user (session cookie on the orchestrator).
 - LLM output cannot grant permissions. The ID validator and the policy check run server-side.
@@ -1011,7 +1022,11 @@ These are estimates; measure actual use in slice S6. Retention: metrics 7 days, 
 | Failure | Expected behaviour |
 |---|---|
 | Specialist unavailable at dispatch | Submit retried per §8.5; task `TIMED_OUT` at deadline; UI shows "waiting for agent" while `readyz` fails |
-| Agent restarts mid-task | Agent marks the task `FAILED (agent_restarted)`; orchestrator re-dispatches once; else partial policy |
+| Agent restarts mid-task | Agent marks the task `FAILED (agent_restarted)`; orchestrator re-dispatches once (fresh deadline); else partial policy |
+| Agent lost the task (poll returns 404) | `FAILED (task_lost)`; re-dispatched once like `agent_restarted` |
+| Agent unreachable during polling | Not a failure; polling continues until the deadline, then `TIMED_OUT` |
+| Agent run passes its deadline | Agent self-cancels at deadline + 5 s; no commit; orchestrator already marked `TIMED_OUT` |
+| Analysis crashes after commit, before ack | Re-dispatch → `409 already_committed` → committed `assessment_id` reported; no duplicate assessment |
 | Orchestrator restarts | Resume sweep reloads `RUNNING`/`ANALYZING` investigations from SQLite and restarts pollers; tasks whose deadline passed during the outage → `TIMED_OUT` |
 | Slow attempt 1 completes after re-dispatch | Batch idempotency on `task_id`: whichever attempt commits first wins; the other gets `409 already_committed` and reports the committed IDs |
 | OpenAI timeout / 429 | Client retries per budget; then task `FAILED (llm_unavailable)`; never fake success |
@@ -1020,7 +1035,7 @@ These are estimates; measure actual use in slice S6. Retention: metrics 7 days, 
 | Context Service unavailable | Agent retries with the same idempotency key; task never reports success without a commit ack |
 | Relate write failure | Transaction rolled back; explicit `5xx`; audit of the failure attempted separately |
 | Duplicate submission | Same key + same content → original IDs; different content → `409` |
-| Late result after cancel | `409 investigation_cancelled`; nothing persisted |
+| Late result after cancel | Context Service fenced first → `409 investigation_cancelled`; nothing persisted. A late `COMPLETED` poll result does not change the sticky `CANCELLED` task state |
 | Fixture hash mismatch | `FAILED (evidence_integrity_error)` |
 | Token budget exceeded | Investigation `PARTIAL (budget_exceeded)` |
 | LGTM unavailable | Business flow continues; exporters drop with bounded queues |
@@ -1159,7 +1174,7 @@ A feature is done only when:
 |---|---|---|
 | Graph store deployment | Relate embedded in the Context Service, single replica, write lane | Proposed — ADR-001 (confirm after S0 spike) |
 | Operational store | SQLite per service; audit + idempotency in Relate; create/close reconciliation | **Accepted** — ADR-002 (A1–A5) |
-| Task execution model | Async submit/poll; agent-persisted task state | Proposed — ADR-003 |
+| Task execution model | Async submit/poll; agent-persisted task state; fence-first cancel; idempotent single-call assessment | **Accepted** — ADR-003 (B1–B7, B9) |
 | A2A implementation | A2A-inspired HTTP contract behind an adapter | Proposed — ADR-004 |
 | Service topology | Gateway + coordinator merged into the orchestrator | Proposed — ADR-005 |
 | LLM test/demo substitute | Labelled `ReplayLLMProvider`, replay mode only | Proposed — ADR-006 |
@@ -1287,8 +1302,10 @@ Source: the v1.1 spec review on 24 Nov 2026. Gap IDs (G1–G9) refer to that rev
 | Token budget | Not enforceable across services | `token_budget` in TaskRequest, `usage` in TaskResult, checked between tasks | G7, §8.5 |
 | Spatial model | CRS unspecified | Cartesian points on the fictional grid; spike verifies `point.distance` + point index | §9.3, §18 |
 | Store hand-off (ADR-002 sign-off) | Crash between SQLite and Context Service writes undefined | `CREATED` resumable; idempotent create/close; `context_closed` reconciler; SQLite WAL + single writer | ADR-002 A1–A3 |
+| Task edges (ADR-003 sign-off) | Cancel order, poll 404, attempt deadline, agent-side deadline undefined; assessment and edges written by two non-idempotent calls | Fence-first cancel; sticky terminal states; `task_lost`; fresh attempt deadline; agent self-cancel; `/v1/relationships` folded into an idempotent `/v1/assessments` | ADR-003 B1–B7 |
 | S0 scope | 6 scenarios + spike + contracts + workspace in 3–4 d | 2 scenarios in S0; the other 4 are authored in S2/S4/S6; 4–5 d | §18 |
 
 **Parked (Good-to-have, not in v1.2):**
 - **G8:** create UNRESOLVED entities inline in the finding batch instead of a separate `POST /v1/entities` call (it removes a non-atomic step).
+- **ADR-003 B8:** before calling the LLM on a re-dispatch, the agent checks whether a submission already exists for the `task_id` and short-circuits (saves the duplicate LLM run). Build it if the S3 chaos tests show the cost matters.
 - **G9:** split the finding `status` into `lifecycle` + `review_flags[]`, or define a precedence between `DISPUTED` and `NEEDS_REVIEW`. Until then: `NEEDS_REVIEW` takes precedence over `DISPUTED`, and `SUPERSEDED` over both.
