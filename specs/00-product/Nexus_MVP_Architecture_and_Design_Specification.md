@@ -231,10 +231,10 @@ Each node runs in its own container with its own process, identity token, config
 
 | Page | Content | Priority |
 |---|---|---|
-| New Investigation | Pick a scenario template, objective (prefilled), agents (from the template) | P0 |
+| New Investigation | Pick a scenario template, objective (prefilled; **locked in replay mode**, ADR-006 E4), agents (from the template) | P0 |
 | Investigation Detail | Live timeline (SSE), task status chips, findings with confidence/classification, assessment, **provenance drawer** (I1), **contradictions panel** (I3), **retract evidence → impact view** (I2), **hidden-link callout** (I4) | P0 |
 | Knowledge Explorer | Read-only graph view of one investigation (Cytoscape.js or react-force-graph) (I6) | P0 (minimal) |
-| System Health / About | Per-component health; synthetic-data and prototype limitations; replay-mode badge; "Why a graph" card (I7, P1) | P0 |
+| System Health / About | Per-component health; synthetic-data and prototype limitations; replay-mode badge (`REPLAY` or `MIXED: <agent>=replay`, derived from every agent's reported `llm_mode`, ADR-006 E3); "Why a graph" card (I7, P1) | P0 |
 | Overview dashboard page | Active investigations, recent activity | P1 |
 
 Rules:
@@ -294,6 +294,7 @@ Each agent:
 - Separates observation from inference.
 - Creates a structured assessment with confidence (number plus band), rationale, gaps and follow-up questions.
 - References exact finding IDs. A **deterministic validator** rejects any assessment that cites a finding ID not present in the retrieval result of that run (anti-hallucination guardrail).
+- **Finding aliases in prompts (ADR-006 E1), in live and replay mode alike:** before the LLM call, the agent replaces finding IDs with short aliases `F1…Fn`, numbered in order of each finding's content hash. The model sees and cites only aliases. After schema validation, the agent maps aliases back to real IDs; an alias outside `F1…Fn` counts as `unknown_finding_reference`. This keeps replay keys stable across runs, gives live and replay one code path, saves tokens and makes invented IDs easy to catch. Manifest IDs (entities, evidence) are stable and are not aliased.
 - Must not invent evidence. Must distinguish supported conclusions from hypotheses.
 
 ### 6.5 Context Service
@@ -764,6 +765,7 @@ We do **not** claim A2A protocol compliance. The adapter in `apps/orchestrator/d
   "usage": {"input_tokens": 3120, "output_tokens": 640, "llm_calls": 1},
   "model_id": "<configured-model>",
   "prompt_version": "sigint-extract@1.2.0",
+  "llm_mode": "live",
   "completed_at": "2026-11-24T09:59:20Z",
   "error": null
 }
@@ -849,11 +851,21 @@ class LLMProvider(Protocol):
 | `OpenAIProvider` | Live demo and normal runs | Responses API with strict JSON Schema output |
 | `ReplayLLMProvider` | Tests, CI, demo fallback | Serves recorded responses from `data/replay/`. Responses are recorded by `scripts/record_replay.py` from real runs. **Selected only when `NEXUS_LLM_MODE=replay`.** The UI shows a "REPLAY MODE" badge, and the timeline marks every replayed call. Never silently substituted (ADR-006). Lookup key defined below. |
 
-**Replay lookup key (v1.2).** A recording is found by `sha256(canonical_json(key_material))`, where `key_material = {scenario_id, agent_id, task_type, prompt_version, schema_version, call_ordinal, normalized_input}`:
+**Replay lookup key (v1.2).** A recording is found by `sha256(canonical_json(key_material))`, where `key_material = {scenario_id, agent_id, task_type, prompt_version, prompt_sha256, schema_version, call_ordinal, normalized_input}`:
 - `normalized_input` is the exact `input_data` passed to the provider, with **volatile fields removed**: generated IDs (`inv_…`, `tsk_…`, `fnd_…`), timestamps that aren't part of the evidence, `attempt`, `trace_context` and budgets. Detectors are deterministic, so their candidate output is stable for a given scenario;
 - `call_ordinal` tells apart the first call from the repair call (0 = primary, 1 = repair);
+- `prompt_sha256` is the hash of the prompt file's contents (ADR-006 E2). Editing a prompt without re-recording causes a miss and a loud error, even if `prompt_version` wasn't bumped;
+- finding IDs never reach `normalized_input`: prompts use `F1…Fn` aliases (§6.4, ADR-006 E1);
 - canonical JSON means sorted keys, no whitespace, UTF-8 and fixed float formatting;
 - each recording stores its key material next to the response, so a miss can be diagnosed by diffing. A miss raises `ReplayMissError` with the expected key; nothing is ever fabricated.
+
+**Replay operating rules (ADR-006 E3–E8):**
+- **Mode is reported everywhere.** Each agent reports `llm_mode` on its Agent Card, on `/readyz` and in every TaskResult. The orchestrator derives the UI badge from all agents: `REPLAY` when all are replaying, `MIXED: <agent>=replay` otherwise. A mixed setup is allowed and always labelled.
+- **Objective locked in replay.** The objective is part of the prompt input, so in replay mode the UI locks it to the scenario template and the API rejects any other value with `422 replay_objective_locked`.
+- **No runtime switching.** There is no endpoint or button to change mode. Changing mode means restarting the agent with a new `NEXUS_LLM_MODE` (`make demo-replay`, about 10 s). A runtime toggle would be exactly the silent-fallback path this design forbids.
+- **Metrics and budget.** LLM metrics and spans carry `nexus.llm.mode` (`live | replay`). Replay reports the **recorded** usage, marked `usage.replayed: true`, so budget enforcement still runs. Latency is never simulated.
+- **Recording is gated by the oracle.** `scripts/record_replay.py` runs a live investigation, checks the result against the scenario oracle, and **refuses to write** a recording that fails it.
+- **What a recording contains:** key material, response body, usage and model ID only. No request headers or auth. A test scans `data/replay/` for API-key patterns (`sk-`).
 
 ### 13.3 Configuration
 
@@ -956,7 +968,7 @@ The agents share `nexus-federation` and `nexus-context`, but they expose no inbo
 | Service | Telemetry |
 |---|---|
 | Orchestrator | HTTP RED; investigation lifecycle counters; task dispatch/poll spans; deadline/timeouts |
-| Agents | Task count/duration/status; detector duration; LLM call spans (`gen_ai.*` semantic conventions: model, token counts, latency, **no content**) |
+| Agents | Task count/duration/status; detector duration; LLM call spans (`gen_ai.*` semantic conventions: model, token counts, latency, **no content**); every LLM metric and span carries `nexus.llm.mode` |
 | Context Service | HTTP RED; validation failures; authz denials; Relate operation spans (`db.system=relate`, operation name only, never parameters) |
 
 ### 15.3 Correlation
@@ -1033,6 +1045,7 @@ make secrets   # generate per-service tokens into .env (git-ignored)
 make up        # core app (lite profile)
 make up-obs    # core + Grafana LGTM
 make demo      # up-obs + open UI; checks OPENAI_API_KEY or offers replay mode
+make demo-replay  # restart agents with NEXUS_LLM_MODE=replay (the only way to switch modes)
 make reset     # stop, wipe Relate store + SQLite volumes (confirmation prompt)
 make backup    # relate clone of the store to ./backups/<timestamp>
 make test      # unit + contract + integration (replay mode)
@@ -1212,7 +1225,7 @@ A feature is done only when:
 | Task execution model | Async submit/poll; agent-persisted task state; fence-first cancel; idempotent single-call assessment | **Accepted** — ADR-003 (B1–B7, B9) |
 | A2A implementation | A2A-inspired HTTP contract behind an adapter; mapped to A2A v1.0.0 with documented divergences | **Accepted** — ADR-004 (C1–C3) |
 | Service topology | Gateway + coordinator merged into the orchestrator; single worker + leader lock; SSE after commit; operator actor header | **Accepted** — ADR-005 (D1–D5) |
-| LLM test/demo substitute | Labelled `ReplayLLMProvider`, replay mode only | Proposed — ADR-006 |
+| LLM test/demo substitute | Labelled `ReplayLLMProvider`, replay mode only; finding aliases in prompts; oracle-gated recordings | **Accepted** — ADR-006 (E1–E8) |
 | AC13 restart recovery | Must (SQLite state tables + resume sweep) | Proposed |
 | Workflow engine | Deterministic state machine, no LangGraph in P0 | Proposed — ADR-008 |
 | Agent facts in the graph | Finding-owned `Assertion` nodes; no agent-written entity↔entity edges | Proposed — ADR-007 |
@@ -1340,6 +1353,7 @@ Source: the v1.1 spec review on 24 Nov 2026. Gap IDs (G1–G9) refer to that rev
 | Task edges (ADR-003 sign-off) | Cancel order, poll 404, attempt deadline, agent-side deadline undefined; assessment and edges written by two non-idempotent calls | Fence-first cancel; sticky terminal states; `task_lost`; fresh attempt deadline; agent self-cancel; `/v1/relationships` folded into an idempotent `/v1/assessments` | ADR-003 B1–B7 |
 | A2A mapping (ADR-004 sign-off) | "Maps 1:1 to A2A"; one task enum mixing orchestrator and agent states; `/.well-known/agent.json` | Mapping table to A2A v1.0.0 with deliberate divergences; separate agent status enum using A2A names (+`REJECTED`); `/.well-known/agent-card.json` | ADR-004 C1–C3 |
 | Orchestrator process (ADR-005 sign-off) | Concurrency inside the merged process unspecified; operator anonymous in the audit | One worker + SQLite leader lock; non-blocking I/O; SSE published after commit with replay-then-live; graceful shutdown changes no state; `X-Nexus-Actor` recorded on audit and Decision | ADR-005 D1–D5 |
+| Replay provider (ADR-006 sign-off) | Replayed Analysis output cited stale finding IDs; prompt edits without a version bump replayed silently; per-agent mode unreported | `F1…Fn` finding aliases in all prompts; `prompt_sha256` in the replay key; `llm_mode` reported and badge derived; objective locked; no runtime switch; oracle-gated recording; key scan | ADR-006 E1–E8 |
 | S0 scope | 6 scenarios + spike + contracts + workspace in 3–4 d | 2 scenarios in S0; the other 4 are authored in S2/S4/S6; 4–5 d | §18 |
 
 **Parked (Good-to-have, not in v1.2):**
