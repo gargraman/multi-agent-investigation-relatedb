@@ -167,13 +167,14 @@ Use a **coordinator-led topology**:
 
 **What Relate is.** Relate is Neo4j's open-source embedded graph database (Apache-2.0, written in Rust, Cypher 25). It was released on 11 Nov 2026; v1.2.x was current at the time of writing. The Python package `relate-db` runs the engine in-process (`relate.connect(path)`, `db.execute(query, params)`). Durability comes from an fsync'd write-ahead log plus snapshot checkpoints (Parquet by default). The engine supports indexes, constraints, **point indexes** and vector indexes. Its documented limits are: one graph per store, **a single user/agent per process**, and a working set that must fit in memory. An optional `relate serve` mode exposes Bolt, HTTP and MCP. Its Docker image is described as dev/test.
 
-> These facts come from vendor documentation and the README as of Nov 2026. Slice S0 must verify them with a spike (§18) before S1 starts.
+> Verified by the S0 spike (`specs/01-architecture/spike-report-relate.md`, ADR-001 R1–R6) on macOS arm64 with `relate-db==1.2.0`. Two corrections: "single user/agent per process" means one thread per store (R1), and the point index is created but not used by the planner (R6). A Linux re-run inside the Context Service image gates the end of S1 (R5).
 
 **Decision.** The Context Service imports `relate-db` and opens the store directory on a named volume. There is no separate Relate container.
 
 Rules:
 - the Context Service runs as **exactly one replica**;
-- all writes are serialized through one in-process write lane (async FastAPI → dedicated worker thread). Reads may share the lane until the S0 spike confirms safe concurrent reads;
+- **all reads and writes** are serialized through one in-process lane (async FastAPI → dedicated worker thread that owns the only connection). Concurrent reads are not possible: connections are thread-bound, only one writable handle exists per store, and read-only handles never see later commits (ADR-001 R1). The lane rolls back on any exception and flushes periodically (R2);
+- `relate-db` and the `relate` CLI (needed for `relate clone`) are pinned to the same version; `DO_NOT_TRACK=1` and `RELATE_TELEMETRY=0` are set wherever the CLI runs; startup fails unless `RELATE_DURABILITY_MODE` is unset or `full` (R3, R4);
 - **`relate serve` (Bolt/HTTP/MCP) is never enabled in Compose**: it exposes raw Cypher and would bypass governance;
 - agents never mount the store volume;
 - every write is a domain operation (e.g. `submit_finding_batch`, `create_assessment`, `retract_evidence`) executed as **one Relate transaction**, including its audit node;
@@ -613,7 +614,7 @@ Schema bootstrap creates:
 - a unique constraint on `Submission.idempotency_key`;
 - indexes on `investigation_id`, `Entity.manifest_id`, `Assertion.type`;
 - every Finding and Assessment stores `classification_rank` (1 = DEMO-LOW … 3 = DEMO-HIGH), so clearance filters are numeric comparisons;
-- a point index on `Location.position`, using **cartesian** points (fictional grid, not WGS-84).
+- a point index on `Location.position`, using **cartesian** points (fictional grid, not WGS-84). It is created for forward compatibility only: Relate 1.2.0's planner does not use it (ADR-001 R6).
 
 Exact DDL syntax is confirmed in the S0 spike.
 
