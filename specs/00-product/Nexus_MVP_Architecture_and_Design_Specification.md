@@ -453,8 +453,9 @@ There is **one retry layer per hop**; layers are never nested.
 - `POST /api/v1/investigations/{id}/cancel`:
   - marks the investigation `CANCELLED`;
   - calls `POST /v1/tasks/{id}/cancel` on every non-terminal task;
-  - tells the Context Service to reject further writes for that investigation, so late results get `409 investigation_cancelled`.
-- On orchestrator startup, a **resume sweep** loads every investigation in `RUNNING` or `ANALYZING` from SQLite, together with its non-terminal tasks, and restarts their pollers. Deadlines are absolute timestamps, so a task whose deadline passed during the outage moves to `TIMED_OUT` straight away.
+  - tells the Context Service to reject further writes for that investigation (`POST /v1/investigations/{id}/close`), so late results get `409 investigation_cancelled`. If that call fails, `context_closed` stays false and the reconciler retries it (ADR-002 A2).
+- On orchestrator startup, a **resume sweep** loads every investigation in `CREATED`, `RUNNING` or `ANALYZING` from SQLite (a `CREATED` one re-runs the idempotent Context Service create, ADR-002 A1), together with its non-terminal tasks, and restarts their pollers. Deadlines are absolute timestamps, so a task whose deadline passed during the outage moves to `TIMED_OUT` straight away.
+- A **close reconciler** (at startup and every 30 s) retries `close` for every terminal investigation with `context_closed = false` (ADR-002 A2).
 - Recovery across restarts is claimed only once the chaos tests pass (§17.3).
 
 ### 8.7 Workflow state (ADR-008)
@@ -463,7 +464,7 @@ The workflow is a deterministic state machine. Its whole state is a few SQLite t
 
 ```text
 investigations(id PK, scenario_id, objective, status, status_reason,
-               tokens_used, token_budget, deadline, assessment_id,
+               tokens_used, token_budget, deadline, assessment_id, context_closed,
                trace_context_json, created_at, updated_at, version)
 tasks(id PK, investigation_id FK, agent_id, task_type, status, status_reason,
       attempt, deadline, finding_ids_json, usage_json, error_category,
@@ -473,6 +474,7 @@ timeline_events(seq INTEGER PK AUTOINCREMENT, investigation_id, type,
 ```
 
 - Each state change is **one SQLite transaction**: a status update, guarded by `version` (optimistic lock) and checked against the transition table, plus its `timeline_events` row.
+- SQLite settings (ADR-002 A3): WAL, `busy_timeout=5000`, one write connection behind an asyncio lock, separate read connections, no network call inside an open transaction.
 - One asyncio poller per active investigation. The poller is stateless; it reads and writes only through the repository.
 - A `WorkflowEngine` interface (`start`, `on_task_update`, `cancel`, `resume_all`) keeps the engine replaceable, e.g. with LangGraph in P1.
 - Large payloads never enter workflow state. `errors` hold a category and code only, never raw content.
@@ -727,9 +729,9 @@ We do **not** claim A2A protocol compliance. The adapter in `apps/orchestrator/d
 
 | Method | Endpoint | Caller | Purpose |
 |---|---|---|---|
-| POST | `/v1/investigations` | orchestrator | Create Investigation + register manifest entities |
+| POST | `/v1/investigations` | orchestrator | Create Investigation + register manifest entities. Idempotent on `investigation_id` (same content → 200, different → 409; ADR-002 A1) |
 | GET | `/v1/investigations/{id}/context` | analysis, orchestrator | Authorized findings, entities, evidence refs |
-| POST | `/v1/investigations/{id}/close` | orchestrator | Mark cancelled/closed; reject further writes |
+| POST | `/v1/investigations/{id}/close` | orchestrator | Mark cancelled/closed; reject further writes. Idempotent (ADR-002 A2) |
 | POST | `/v1/findings:batch` | sigint, geoint | Submit **all** findings of one task (evidence refs, `ABOUT` edges, assertions) in one transaction, idempotent on `task_id` (§8.5) |
 | POST | `/v1/entities` | sigint, geoint | Create an UNRESOLVED entity |
 | POST | `/v1/relationships` | analysis | Propose CORROBORATES / CONTRADICTS / DERIVED_FROM (validated) |
@@ -1156,7 +1158,7 @@ A feature is done only when:
 | Decision | v1.1 position | Status |
 |---|---|---|
 | Graph store deployment | Relate embedded in the Context Service, single replica, write lane | Proposed — ADR-001 (confirm after S0 spike) |
-| Operational store | SQLite per service; audit + idempotency in Relate | Proposed — ADR-002 |
+| Operational store | SQLite per service; audit + idempotency in Relate; create/close reconciliation | **Accepted** — ADR-002 (A1–A5) |
 | Task execution model | Async submit/poll; agent-persisted task state | Proposed — ADR-003 |
 | A2A implementation | A2A-inspired HTTP contract behind an adapter | Proposed — ADR-004 |
 | Service topology | Gateway + coordinator merged into the orchestrator | Proposed — ADR-005 |
@@ -1284,6 +1286,7 @@ Source: the v1.1 spec review on 24 Nov 2026. Gap IDs (G1–G9) refer to that rev
 | Replay lookup | Undefined | Hash of canonical key material with volatile fields stripped | G6, §13.2 |
 | Token budget | Not enforceable across services | `token_budget` in TaskRequest, `usage` in TaskResult, checked between tasks | G7, §8.5 |
 | Spatial model | CRS unspecified | Cartesian points on the fictional grid; spike verifies `point.distance` + point index | §9.3, §18 |
+| Store hand-off (ADR-002 sign-off) | Crash between SQLite and Context Service writes undefined | `CREATED` resumable; idempotent create/close; `context_closed` reconciler; SQLite WAL + single writer | ADR-002 A1–A3 |
 | S0 scope | 6 scenarios + spike + contracts + workspace in 3–4 d | 2 scenarios in S0; the other 4 are authored in S2/S4/S6; 4–5 d | §18 |
 
 **Parked (Good-to-have, not in v1.2):**
