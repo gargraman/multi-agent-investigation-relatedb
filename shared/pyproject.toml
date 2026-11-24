@@ -1,0 +1,15 @@
+[project]
+name = "nexus-shared"
+version = "0.1.0"
+description = "Cross-cutting libraries shared by Nexus services (config, logging, telemetry, security, llm)."
+requires-python = ">=3.12"
+dependencies = [
+    "nexus-contracts",
+]
+
+[tool.uv.sources]
+nexus-contracts = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"

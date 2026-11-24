@@ -1,0 +1,61 @@
+# Nexus uv workspace root (virtual: no [project] table, nothing to build here).
+# Packaging rule (spec §7): each service depends only on itself + nexus-contracts + nexus-shared.
+# A node must never import another node's package.
+
+[tool.uv.workspace]
+members = [
+    "contracts",
+    "shared",
+    "apps/orchestrator",
+    "nodes/sigint-node",
+    "nodes/geoint-node",
+    "nodes/analysis-node",
+    "context-service",
+]
+exclude = ["spikes/*", "spikes"]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["spikes", "specs", "docs"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (imports)
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "nexus_contracts",
+    "nexus_shared",
+    "nexus_orchestrator",
+    "nexus_sigint",
+    "nexus_geoint",
+    "nexus_analysis",
+    "nexus_context_service",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "contracts/tests",
+    "shared/tests",
+    "apps/orchestrator/tests",
+    "nodes/sigint-node/tests",
+    "nodes/geoint-node/tests",
+    "nodes/analysis-node/tests",
+    "context-service/tests",
+]
+# importlib mode: several members have identically named test modules (test_import.py).
+addopts = ["--import-mode=importlib", "-ra", "--strict-markers"]

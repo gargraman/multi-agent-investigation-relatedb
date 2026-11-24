@@ -1,0 +1,17 @@
+[project]
+name = "nexus-context-service"
+version = "0.1.0"
+description = "Nexus Context Service: the only gateway to the shared Relate graph."
+requires-python = ">=3.12"
+dependencies = [
+    "nexus-contracts",
+    "nexus-shared",
+]
+
+[tool.uv.sources]
+nexus-contracts = { workspace = true }
+nexus-shared = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
