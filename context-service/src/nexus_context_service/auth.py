@@ -1,0 +1,70 @@
+"""Caller authentication and the operation allowlist (spec §14.1, ADR-005 D4).
+
+S1 keeps the authorization matrix as an in-code table mirroring spec §14.1. It moves to
+``config/policy.yaml`` in a later slice (with classification clearance, which S1 does not need:
+no S1 endpoint returns classified records).
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Awaitable, Callable
+
+from fastapi import Request
+
+from nexus_context_service.errors import ProblemError
+from nexus_context_service.lane import LaneUnavailable
+from nexus_context_service.repository import AuditContext, GraphRepository
+from nexus_shared.security import ACTOR_HEADER, ORCHESTRATOR, TokenRegistry, resolve_actor
+
+log = logging.getLogger(__name__)
+
+SIGINT = "sigint-agent"
+GEOINT = "geoint-agent"
+ANALYSIS = "analysis-agent"
+
+# Operation -> callers allowed to perform it (spec §14.1 table, one row per operation).
+POLICY: dict[str, frozenset[str]] = {
+    "investigations.create": frozenset({ORCHESTRATOR}),
+    "investigations.close": frozenset({ORCHESTRATOR}),
+    "investigations.context": frozenset({ORCHESTRATOR, ANALYSIS}),
+    "assessments.provenance": frozenset({ORCHESTRATOR}),
+    "evidence.retract": frozenset({ORCHESTRATOR}),
+    "entities.contradictions": frozenset({ORCHESTRATOR}),
+    "investigations.links": frozenset({ORCHESTRATOR}),
+    "investigations.graph": frozenset({ORCHESTRATOR}),
+    "audit.read": frozenset({ORCHESTRATOR}),
+    "findings.submit": frozenset({SIGINT, GEOINT}),
+    "entities.create": frozenset({SIGINT, GEOINT}),
+    "search": frozenset({ANALYSIS}),
+    "assessments.create": frozenset({ANALYSIS}),
+}
+
+
+def is_allowed(caller: str, operation: str) -> bool:
+    return caller in POLICY.get(operation, frozenset())
+
+
+def authorize(operation: str) -> Callable[[Request], Awaitable[AuditContext]]:
+    """FastAPI dependency: 401 without a valid bearer, 403 (audited) for a disallowed caller."""
+
+    async def _dep(request: Request) -> AuditContext:
+        registry: TokenRegistry = request.app.state.token_registry
+        caller = registry.authenticate(request.headers.get("Authorization"))
+        if caller is None:
+            raise ProblemError(
+                401, "missing or invalid bearer token", headers={"WWW-Authenticate": "Bearer"}
+            )
+        audit = AuditContext(
+            caller=caller, actor=resolve_actor(caller, request.headers.get(ACTOR_HEADER))
+        )
+        if not is_allowed(caller, operation):
+            repo: GraphRepository = request.app.state.repository
+            try:  # standalone denial audit (spec §14.4, ADR-002)
+                await repo.record_denial(audit, operation, request.path_params.get("id"))
+            except LaneUnavailable:
+                log.warning("denial not audited: store not ready", extra={"op": operation})
+            raise ProblemError(403, f"caller is not allowed to perform {operation}")
+        return audit
+
+    return _dep
