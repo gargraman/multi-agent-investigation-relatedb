@@ -12,7 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPLAY_ROOT = REPO_ROOT / "data" / "replay"
 
-KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
+KEY_PATTERN = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}")  # look-behind: not "risk-..."
 AUTH_PATTERN = re.compile(r"(?i)\"(authorization|api[_-]?key|x-api-key)\"\s*:")
 
 
@@ -41,3 +41,12 @@ def test_scanner_catches_planted_key(tmp_path: Path) -> None:
     assert scan(tmp_path) == ["sigint-agent/prompt-injection/abc.json: sk- key pattern"]
     rec.write_text('{"headers": {"Authorization": "Bearer x"}}')
     assert scan(tmp_path) == ["sigint-agent/prompt-injection/abc.json: auth header/key field"]
+
+
+def test_scan_ignores_words_ending_in_sk(tmp_path: Path) -> None:
+    rec = tmp_path / "sigint-agent" / "baseline-corroboration" / "k.json"
+    rec.parent.mkdir(parents=True)
+    rec.write_text(
+        '{"response": {"statement": "A high-risk-contact pattern; desk-officer review."}}'
+    )
+    assert scan(tmp_path) == []
