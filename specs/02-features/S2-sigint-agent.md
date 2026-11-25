@@ -102,8 +102,8 @@ Prove the whole agent path on real infrastructure with one agent:
 
 | Actor | Role in S2 | Network(s) | Token |
 |---|---|---|---|
-| orchestrator | Dispatches, polls, timeline | nexus-app, nexus-federation, nexus-context | `NEXUS_TOKEN_ORCHESTRATOR` |
-| sigint-node (`sigint-agent`) | Runs the task, submits findings | nexus-federation, nexus-context, nexus-egress | `NEXUS_TOKEN_SIGINT_AGENT` |
+| orchestrator | Dispatches, polls, timeline | nexus-app, nexus-context | `NEXUS_TOKEN_ORCHESTRATOR` |
+| sigint-node (`sigint-agent`) | Runs the task, submits findings | nexus-context, nexus-egress | `NEXUS_TOKEN_SIGINT_AGENT` |
 | context-service | Sole writer to Relate | nexus-context | validates both |
 | OpenAI API | Classification (live mode only) | via nexus-egress | `OPENAI_API_KEY` |
 | Corporate TLS proxy | Intercepts egress TLS | host | host CA bundle |
@@ -249,7 +249,7 @@ UPDATE agent_tasks
 
 ### 8.4 `findings:batch` Cypher (one lane tx, ADR-001 R1/R2; parameters only, no string building)
 
-Server-side derivations: `uid = $inv + ':' + manifest_id`, `finding_id = fnd_<ulid>`, `assertion_id = asm_<ulid>`, `submission_id = sub_<ulid>`, `classification_rank` from §9.5.
+Server-side derivations: `uid = $inv + ':' + manifest_id`, `finding_id = fnd_<ulid>`, `assertion_id = asr_<ulid>`, `submission_id = sub_<ulid>`, `classification_rank` from §9.5.
 
 ```cypher
 // 1. Idempotency + fence (one read; replay is decided before the fence, G15)
@@ -360,7 +360,7 @@ Replay mode: the OpenAI hop is replaced by a file read, and `llm.replayed` is em
 
 ### 10.1 Isolation (AC5, §14)
 - Only context-service mounts `relate-store`. Only sigint-node mounts `data/scenarios/*/fixtures/sigint` (ro). Enforced by a compose lint test that parses `compose.yaml`.
-- Only sigint-node joins `nexus-egress` (non-internal). The orchestrator reaches sigint over `nexus-federation` (internal).
+- Only sigint-node joins `nexus-egress` (non-internal). The orchestrator reaches sigint over `nexus-context` (internal). `nexus-federation` is deferred until a second agent exists (S3).
 - Tokens: sigint-node accepts only `NEXUS_TOKEN_ORCHESTRATOR` on `/v1/tasks`. The Context Service accepts `sigint-agent` only for `findings.submit` (`auth.py` POLICY).
 
 ### 10.2 Prompt-injection controls (AC17)
@@ -546,3 +546,21 @@ Each gap lists options with the recommended one first.
 - Relate: datetimes inside UNWIND maps (G16).
 - S1 Evidence `owner_node_id` value format (G21). Agent card path in §12.2.
 - Pricing and latency of the candidate models: measured by `verify-openai`, not assumed.
+
+## 20. Implementation notes (post-merge, 2026-11-25)
+
+Places where the shipped code differs from or adds to this spec. Each is verified against the code.
+
+| # | Note | Where | Follow-up |
+|---|---|---|---|
+| N1 | Assertion ids use the `asr_` prefix (fixed in §8.4 above). | `context-service/.../ids.py` | — |
+| N2 | `tasks.llm_mode TEXT` (CHECK in `live`/`replay`) is added to the main spec §8.7 table, with an idempotent `ALTER` on start. | `apps/orchestrator/.../state/db.py` | Update main spec §8.7. |
+| N3 | Networks: no `nexus-federation` in S2. The orchestrator and sigint share the internal `nexus-context`, and only sigint joins `nexus-egress`. | `compose.yaml`, `tests/infra/test_compose_isolation.py` | Add `nexus-federation` in S3 if agents must not reach the CS directly. |
+| N4 | `GET .../context` accepts only the orchestrator until S4 (analysis-agent). | CS auth policy | S4 |
+| N5 | There is no `internal_error` code. An unhandled agent crash maps to `agent_restarted`. | sigint task store | Add `internal_error` in S3. |
+| N6 | The agent `request_hash` excludes `trace_context` and includes `deadline`, so S3 re-dispatch of the same attempt must resend the same deadline or it gets a 409 content conflict. | sigint A2A surface | S3 dispatcher |
+| N7 | A `findings:batch` replay with the same `task_id` from a **different caller** returns 409 with the committed `finding_ids`. That leaks ids across agents. Low risk with one agent. | CS `findings:batch` | Scope the idempotency key by caller in S3. |
+| N8 | A dispatch failure emits `transition.dropped` with reason `agent_unreachable`. The investigation stays RUNNING (G13). | orchestrator `workflow/dispatch.py` | S3 deadlines |
+| N9 | `SystemHealth` lives in the orchestrator, not in contracts. | orchestrator API | Move to contracts when the UI types it. |
+| N10 | AC17 A/B (2026-11-25): 3 injected vs 3 injection-stripped live runs. C2 = `ISOLATED_CONTACT` in all 6 (confidence 0.72–0.90), so the label is the model's own judgement. The injected confidence 0.0 was never followed. | `data/replay/sigint-agent/prompt-injection/` | — |
+| N11 | **Open: stored injection text.** `evidence[].summary` is the fixture's summary copied verbatim, so the injection payload (including tripwire strings) is persisted in the graph and served by `GET .../findings`. The tripwire gate scans only `statement`/`reasoning_summary`, so AC17 passes as specified. It becomes a second-order injection vector when S4's analysis-agent reads findings. | `nexus_sigint/pipeline.py` (`_to_draft`) | Decision pending |
