@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -91,6 +91,23 @@ CREATE INDEX IF NOT EXISTS ix_timeline_investigation_seq ON timeline_events (inv
 """
 
 
+async def _settle[T](aw: Awaitable[T]) -> tuple[T, bool]:
+    """Await ``aw`` to completion even if the caller is cancelled meanwhile.
+
+    Returns ``(result, interrupted)``; ``interrupted`` is True if a cancel arrived, so the caller
+    can re-raise it once the database is in a known state.
+    """
+    task = asyncio.ensure_future(aw)
+    interrupted = False
+    while True:
+        try:
+            return await asyncio.shield(task), interrupted
+        except asyncio.CancelledError:
+            if task.done():  # the inner operation itself was cancelled or failed
+                return task.result(), True
+            interrupted = True
+
+
 class Transaction:
     """Handle for one open write transaction."""
 
@@ -147,28 +164,49 @@ class Database:
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[Transaction]:
-        """``BEGIN IMMEDIATE`` … ``COMMIT`` on the single writer. Rolls back on any error."""
+        """``BEGIN IMMEDIATE`` … ``COMMIT`` on the single writer. Rolls back on any error.
+
+        Cancellation safety: aiosqlite runs each statement on a worker thread, and cancelling
+        the awaiting coroutine does **not** stop a statement that is already queued. So a
+        cancel that lands while ``BEGIN IMMEDIATE`` is queued used to see
+        ``in_transaction == False``, skip the rollback, and leave the writer inside a
+        transaction once the BEGIN ran (every later ``BEGIN`` then failed with "cannot start a
+        transaction within a transaction"). Now the rollback first drains the worker queue, and
+        ``COMMIT`` is run to completion even if a cancel arrives, so the outcome is known; the
+        cancel is re-raised afterwards.
+        """
         assert self._writer is not None and self._write_lock is not None, "database not open"
         async with self._write_lock:
             conn = self._writer
-            await conn.execute("BEGIN IMMEDIATE")
             tx = Transaction(conn)
             try:
+                await conn.execute("BEGIN IMMEDIATE")
                 yield tx
-                await self._commit(conn)
-            except BaseException:
-                if conn.in_transaction:
-                    await conn.execute("ROLLBACK")
+                _, interrupted = await _settle(self._commit(conn))
+            except BaseException as exc:
+                _, interrupted = await _settle(self._rollback(conn))
+                if interrupted and not isinstance(exc, asyncio.CancelledError):
+                    raise asyncio.CancelledError() from exc
                 raise
             for fn in tx._after_commit:
                 try:
                     fn()
                 except Exception:  # a broken subscriber must not undo a committed write
                     log.exception("post-commit hook failed")
+            if interrupted:
+                raise asyncio.CancelledError()
 
     async def _commit(self, conn: aiosqlite.Connection) -> None:
         """Separate method so tests can inject a commit failure."""
         await conn.execute("COMMIT")
+
+    @staticmethod
+    async def _rollback(conn: aiosqlite.Connection) -> None:
+        # Barrier: statements run in order on the worker thread, so once this returns any
+        # statement whose await was cancelled (e.g. a queued BEGIN) has really executed.
+        await (await conn.execute("SELECT 1")).close()
+        if conn.in_transaction:
+            await conn.execute("ROLLBACK")
 
     async def fetchall(self, sql: str, params: Iterable[Any] = ()) -> list[aiosqlite.Row]:
         assert self._reader is not None, "database not open"
