@@ -1,13 +1,15 @@
 # Nexus — MVP Architecture & Design Specification
 
-**Version:** 1.2 (supersedes v1.1; earlier versions archived at `docs/archive/`)
-**Date:** 24 November 2026
+**Version:** 1.3 (supersedes v1.2; earlier versions archived at `docs/archive/`)
+**Date:** 25 November 2026
 **Purpose:** Implementation baseline for spec-driven development with an AI coding assistant
 **Deployment:** Local Docker Compose demo
 **LLM:** OpenAI API
 **Shared graph:** Relate (Neo4j's embedded graph database), embedded in the Context Service
 **Initial domain:** Fictional defense-intelligence collaboration using synthetic data only
 
+> **What changed in v1.3:** contract clarifications found while implementing the S0 contract models and scenario packs; see [Appendix C](#appendix-c--changelog-v12--v13). All ADRs are now Accepted.
+>
 > **What changed in v1.2:** see [Appendix B — Changelog](#appendix-b--changelog-v11--v12). In short: LangGraph has been dropped from P0, the task/finding contracts have been fixed for retries and budgets, spatial and contact facts now hang off findings, and S0 is smaller. v1.1 changes are in [Appendix A](#appendix-a--changelog-v10--v11). Decisions marked **(Proposed)** are recorded as ADRs under `specs/01-architecture/adr/` and need sign-off before the affected slice starts.
 
 ---
@@ -82,11 +84,11 @@ Do not implement real signal interception, surveillance, targeting, weapons, ope
 | Area | P0 item |
 |---|---|
 | UI | React + TypeScript (shadcn/ui + Tailwind, **Proposed**). Pages: New Investigation, Investigation Detail (timeline, tasks, findings, assessment, provenance drawer, retraction impact), Knowledge Explorer (minimal, read-only), System Health/About. Persistent "SYNTHETIC DATA" banner. |
-| Orchestrator | **One** FastAPI service combining the frontend API and a deterministic investigation workflow: an explicit state machine with SQLite persistence and an asyncio poller (**Proposed**, ADR-005, ADR-008). |
+| Orchestrator | **One** FastAPI service combining the frontend API and a deterministic investigation workflow: an explicit state machine with SQLite persistence and an asyncio poller (**Accepted**, ADR-005, ADR-008). |
 | Agents | Three independent agent containers: SIGINT, GEOINT, Analysis. |
 | Agent protocol | **A2A-inspired** async task contract over HTTP. It maps onto A2A v1.0.0 concepts, with documented deliberate divergences (ADR-004). |
 | Context Service | The only owner of the shared Relate store (embedded, in-process; ADR-001). Typed REST client for agents. |
-| Operational state | SQLite per service (orchestrator, each agent). Audit and idempotency records live in Relate, written in the same transaction (**Proposed**, ADR-002). |
+| Operational state | SQLite per service (orchestrator, each agent). Audit and idempotency records live in Relate, written in the same transaction (**Accepted**, ADR-002). |
 | LLM | OpenAI via a small provider abstraction. `ReplayLLMProvider`, clearly labelled, for tests and demo fallback (ADR-006). |
 | Data | Scenario pack (6 scenarios), seeded noise generator, scenario manifest with an expected-outcome oracle. |
 | Graph value | Provenance trail, evidence-retraction impact, contradiction neighbourhood, cross-agent hidden link, minimal graph view (§10). |
@@ -419,14 +421,15 @@ TIMED_OUT | FAILED(agent_restarted) | FAILED(task_lost) -> PENDING   (single re-
 
 Terminal task states are **sticky** in the orchestrator: once it records `CANCELLED`, `COMPLETED` or a non-redispatchable `FAILED`, a later poll result never changes it. A late result is logged as a timeline event only.
 
-A task is identified by `task_id`; each dispatch of it is an **attempt** (`attempt` = 1, 2). Every task has at most two attempts.
+A task is identified by `task_id`; each dispatch of it is an **attempt** (`attempt` = 1, 2). Every task has at most two attempts. The limit is **engine policy**, enforced by the orchestrator; the wire contract only requires `attempt ≥ 1`, so raising the limit later is not a schema change (v1.3).
 
 **Agent task status** (on the wire, per attempt; names match A2A v1.0.0 `TaskState`, ADR-004 C2)
 
 ```text
 SUBMITTED -> WORKING -> COMPLETED
-                    \-> FAILED      (error.code: schema_invalid, llm_unavailable, evidence_integrity_error,
-                                     budget_exceeded, deadline_exceeded, agent_restarted, ...)
+                    \-> FAILED      (error.code: schema_invalid, llm_unavailable, replay_miss,
+                                     unknown_finding_reference, evidence_integrity_error,
+                                     budget_exceeded, deadline_exceeded, agent_restarted)
 SUBMITTED -> REJECTED               (refused at submit: unknown task_type, classification_ceiling above the agent's clearance)
 any non-terminal -> CANCELED
 ```
@@ -486,7 +489,7 @@ There is **one retry layer per hop**; layers are never nested.
 
 **Idempotency: one task, one commit.**
 - All findings from one task are submitted in **one batch** (`POST /v1/findings:batch`), written in **one transaction** under `idempotency_key = {task_id}`. Different attempts of the same task share the key, so at most one attempt's results are ever committed.
-- The batch `content_hash` is computed over the canonical JSON of **every finding including its assertions and evidence refs** (sorted keys; assertions sorted by type, subject, object/location, `valid_from`). The Context Service stores the key and the hash on a `Submission` node, protected by a unique constraint. Each committed Finding links to it (`(Submission)-[:COMMITTED]->(Finding)`).
+- The batch `content_hash` is computed over the canonical JSON of **every finding including its assertions and evidence refs**: sorted keys, no whitespace, UTF-8; `confidence` rounded to 4 decimals; assertions sorted by type, subject, object/location, `valid_from`; every other list inside a finding sorted by its canonical JSON; **findings sorted by their own canonical JSON** (v1.3). Order never changes the hash, so a reordered retry is not a false `409`. `task_id`, `attempt` and `investigation_id` are excluded. The response still lists finding IDs in submission order. The Context Service stores the key and the hash on a `Submission` node, protected by a unique constraint. Each committed Finding links to it (`(Submission)-[:COMMITTED]->(Finding)`).
 - Replaying the same key with the same content hash returns the original finding IDs.
 - Replaying the same key with a different hash (a later attempt that produced different LLM output) returns `409 already_committed` along with the committed finding IDs. The agent reports those IDs as its result.
 - Why a batch: per-finding keys (`{task_id}:{ordinal}`, v1.1) could mix findings from two attempts when the LLM output differs between them.
@@ -563,6 +566,7 @@ Every Finding and Assessment includes:
 id, investigation_id, submission_id (findings) / task_id (assessments)
 source_agent_id, source_node_id, source_evidence_ids[]
 kind                      # OBSERVATION | INFERENCE  (findings)
+statement                 # the claim itself, one or two sentences (findings; v1.3)
 confidence                # float 0..1
 confidence_band           # LOW | MODERATE | HIGH   (mandatory; bands documented, uncalibrated)
 classification            # DEMO-LOW | DEMO-MID | DEMO-HIGH
@@ -800,7 +804,22 @@ We do **not** claim A2A protocol compliance. The adapter in `apps/orchestrator/d
 }
 ```
 
-`error` is `{category, code}` (e.g. `{"category":"llm","code":"schema_invalid"}`) and never contains raw content.
+`error` is `{category, code}` (e.g. `{"category":"llm","code":"schema_invalid"}`) and never contains raw content. Analysis results also carry the committed `assessment_id` (optional field, null for other agents; §17.1). `usage` may include `replayed: true` (ADR-006 E7; default false).
+
+**Task types (v1.3):** `analyze_synthetic_communications` (SIGINT), `analyze_synthetic_geospatial` (GEOINT), `assess_findings` (Analysis). `task_type` is a free string on the wire, so an unknown type reaches the agent and is `REJECTED`, not a `422`.
+
+**Error codes and categories (v1.3).** `ErrorCode` in `contracts/api/errors.py` is the single list; every code has exactly one category. Codes not named before v1.3 are marked *new*.
+
+| Category | Codes |
+|---|---|
+| `llm` | `schema_invalid` (also the `422` code for a malformed request body), `llm_unavailable`, `unknown_finding_reference`, `replay_miss` *new* (recording not found, ADR-006) |
+| `evidence` | `evidence_integrity_error` |
+| `budget` | `budget_exceeded` |
+| `deadline` | `deadline_exceeded`, `investigation_deadline` |
+| `lifecycle` | `agent_restarted`, `task_lost`, `investigation_cancelled` |
+| `policy` | `task_rejected`, `analysis_policy_unmet` *new* (Analysis skipped: dispatch policy not met, §8.2) |
+| `conflict` | `stale_attempt`, `already_committed`, `content_conflict` *new* (`409`: an idempotent create with the same key but different content) |
+| `validation` | `replay_objective_locked` |
 
 ### 12.3 Context Service API
 
@@ -842,7 +861,7 @@ We do **not** claim A2A protocol compliance. The adapter in `apps/orchestrator/d
     "effect_on_confidence": "Lowered from HIGH to MODERATE."
   }],
   "information_gaps": ["No independent corroboration of ENT-BRAVO's communications."],
-  "status": "DRAFT",
+  "status": "ACTIVE",
   "model_id": "<configured-model>",
   "prompt_version": "analysis-assess@1.0.0"
 }
@@ -1252,16 +1271,16 @@ A feature is done only when:
 
 | Decision | v1.1 position | Status |
 |---|---|---|
-| Graph store deployment | Relate embedded in the Context Service, single replica, write lane | Proposed — ADR-001 (confirm after S0 spike) |
+| Graph store deployment | Relate embedded in the Context Service, single replica, write lane | **Accepted** — ADR-001 (R1–R6, after the S0 spike) |
 | Operational store | SQLite per service; audit + idempotency in Relate; create/close reconciliation | **Accepted** — ADR-002 (A1–A5) |
 | Task execution model | Async submit/poll; agent-persisted task state; fence-first cancel; idempotent single-call assessment | **Accepted** — ADR-003 (B1–B7, B9) |
 | A2A implementation | A2A-inspired HTTP contract behind an adapter; mapped to A2A v1.0.0 with documented divergences | **Accepted** — ADR-004 (C1–C3) |
 | Service topology | Gateway + coordinator merged into the orchestrator; single worker + leader lock; SSE after commit; operator actor header | **Accepted** — ADR-005 (D1–D5) |
 | LLM test/demo substitute | Labelled `ReplayLLMProvider`, replay mode only; finding aliases in prompts; oracle-gated recordings | **Accepted** — ADR-006 (E1–E8) |
-| AC13 restart recovery | Must (SQLite state tables + resume sweep) | Proposed |
+| AC13 restart recovery | Must (SQLite state tables + resume sweep) | **Accepted** — ADR-002 A1, ADR-008 F1–F3 |
 | Workflow engine | Deterministic state machine, no LangGraph in P0; dispatch intent; stale-lock takeover; budget reservations; investigation deadline transition | **Accepted** — ADR-008 (F1–F9) |
 | Agent facts in the graph | Finding-owned `Assertion` nodes; per-investigation entities; I4 = two-hop cross-agent path | **Accepted** — ADR-007 (G1–G11) |
-| Finding idempotency | One batch per task, keyed by `task_id`; `attempt` on task requests | Proposed (v1.2, §8.5) |
+| Finding idempotency | One batch per task, keyed by `task_id`; `attempt` on task requests; order-independent content hash | **Accepted** — ADR-003 (B6), v1.3 §8.5 |
 | Clearance-filter audit | `FILTERED` audit event with counts; 404 on direct over-clearance access | Proposed (v1.2, §9.5) |
 | UI component library | shadcn/ui + Tailwind | Proposed |
 | OpenAI models | Small model for extraction, stronger for analysis; chosen at S2 | Open (S2) |
@@ -1397,3 +1416,25 @@ Source: the v1.1 spec review on 24 Nov 2026. Gap IDs (G1–G9) refer to that rev
 - **ADR-004 C5:** rename cancel to `POST /v1/tasks/{id}:cancel` (A2A style, matches `findings:batch`).
 - **ADR-005 D6:** enforce the `api/` ↔ `workflow/` boundary with an `import-linter` contract (`api` uses only `WorkflowEngine`; `workflow` never imports `api`).
 - **G9:** split the finding `status` into `lifecycle` + `review_flags[]`, or define a precedence between `DISPUTED` and `NEEDS_REVIEW`. Until then: `NEEDS_REVIEW` takes precedence over `DISPUTED`, and `SUPERSEDED` over both.
+
+## Appendix C — Changelog v1.2 → v1.3
+
+Source: implementing the S0 contract models (`contracts/`) and the first two scenario packs (`data/`), 24–25 Nov 2026. Each row is a gap or inconsistency the code had to resolve; the code and this spec now agree.
+
+| # | Area | v1.2 | v1.3 | Ref |
+|---|---|---|---|---|
+| 1 | Assessment status | §12.4 example used `DRAFT`, which §9.2 doesn't define | Assessments are created `ACTIVE`; no `DRAFT` state | §9.2, §12.4 |
+| 2 | Error codes | §8.2's FAILED list ended in "…"; several failure paths had no code | Full list with categories; new `replay_miss`, `analysis_policy_unmet`, `content_conflict`; malformed body = `schema_invalid` | §8.2, §12.2 |
+| 3 | Attempt limit | Implied a wire-level cap of 2 | Limit is engine policy; contract requires only `attempt ≥ 1` | §8.2 |
+| 4 | Content hash | Finding/evidence order and float format undefined | Findings and in-finding lists sorted canonically; `confidence` rounded to 4 dp | §8.5 |
+| 5 | Finding content | No field for the claim itself | `statement` added | §9.2 |
+| 6 | Analysis result | §17.1 reports `assessment_id`, but TaskResult had no field | Optional `assessment_id` on TaskResult | §12.2, §17.1 |
+| 7 | Error categories | Only `llm` shown | Eight categories, code→category map enforced | §12.2 |
+| 8 | Task types | Only SIGINT's named | `analyze_synthetic_geospatial`, `assess_findings` added | §12.2 |
+| 9 | Unspecified shapes | Not given | Defined minimally in `contracts/`: edge proposal `{type, source_finding_id, target_finding_id}`; per-edge rejection carries an `ErrorCode` (`unknown_finding_reference`, so nothing leaks); retraction request and impact set; five timeline event types from §8 prose; Assessment `follow_up_questions[]` (§6.4) | `contracts/api/`, `contracts/events/` |
+| 10 | Contact order (ADR-007 G3) | Normalise or reject? | `LINKED_TO` `CONTACT` is normalised to canonical order on parse | ADR-007 |
+| 11 | Timestamps | Unspecified handling of naive/offset datetimes | Timezone-aware UTC only; naive or non-UTC values are rejected, not converted | §9.2 |
+| 12 | Scenario manifest | §11.3 listed fields only | Template = `[{agent, task_type, token_share, input_refs}]`; each evidence item belongs to exactly one task of its owner; Analysis has no input refs; shares sum ≤ 1. Grid cells declared as `LOC-GRID-<row*cols+col>`. sha256 values quoted in YAML. Signal/noise marking lives in `generator.yaml`, not the manifest | §11.3 |
+| 13 | Oracle | Expectations described informally | Oracle names manifest evidence/entity IDs, never finding IDs. Corroboration = two agents, a contact window overlapping the same pair's co-location window. Contradiction = same subject in cells > 1.5 × pitch apart with overlapping windows. A graph-free verifier checks fixtures (signal + noise) against the oracle exactly | §10, §11.3 |
+
+**Parked (Good-to-have, not in v1.3):** define `classification` and `confidence_band` derivation thresholds for assessments (not enforced yet); the remaining four scenario packs (`retraction`, `prompt-injection`, `over-classified`, `canary`), authored in S2/S4/S6 per §18.
