@@ -30,3 +30,6 @@ spikes/**/store/
 .vscode/
 .codegraph/
 graphify-out/
+
+# Agent git worktrees (Claude Code)
+.claude/worktrees/

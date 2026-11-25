@@ -58,6 +58,16 @@ reset: ## Stop and WIPE the Relate store + SQLite volumes (asks first)
 	@read -p "Wipe all Nexus volumes (Relate store, SQLite)? [y/N] " ans; [ "$$ans" = "y" ] || { echo aborted; exit 1; }
 	$(COMPOSE) down -v
 
+# Host-side LLM tooling: loads .env into the process (values never echoed).
+WITH_ENV = set -a && . ./.env && set +a &&
+
+verify-openai: .env ## (S2) List models + strict-schema probe for OPENAI_MODEL_EXTRACT
+	@$(WITH_ENV) uv run python scripts/verify_openai.py
+
+record-replay: .env ## (S2) Oracle-gated live recording: make record-replay SCENARIO=prompt-injection
+	@test -n "$(SCENARIO)" || { echo "usage: make record-replay SCENARIO=<id>" >&2; exit 2; }
+	@$(WITH_ENV) uv run python scripts/record_replay.py --scenario $(SCENARIO) --agent sigint-agent
+
 spike-linux: .env ## ADR-001 R5: Relate spike suite inside the Linux Context Service image
 	scripts/spike_linux.sh
 
@@ -70,11 +80,11 @@ up-obs: ## (S6) core + Grafana LGTM
 	$(call not_implemented,S6)
 demo: ## (S6) up-obs + open UI
 	$(call not_implemented,S6)
-demo-replay: ## (S2) restart agents in replay mode
+demo-replay: ## (S2, Good-to-have) restart agents in replay mode
 	$(call not_implemented,S2)
 backup: ## (S1, Good-to-have) relate clone of the store to ./backups/
 	$(call not_implemented,S1)
 e2e: ## (S5) Playwright + chaos + telemetry tests
 	$(call not_implemented,S5)
-smoke-live: ## (S2) live-LLM smoke test
+smoke-live: ## (S2, Good-to-have) live-LLM smoke test
 	$(call not_implemented,S2)

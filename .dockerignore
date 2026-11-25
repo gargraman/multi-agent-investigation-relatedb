@@ -16,3 +16,4 @@ data
 graphify-out
 .codegraph
 apps/frontend
+.claude

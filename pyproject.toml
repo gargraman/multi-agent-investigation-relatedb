@@ -59,6 +59,7 @@ testpaths = [
     "nodes/geoint-node/tests",
     "nodes/analysis-node/tests",
     "context-service/tests",
+    "tests/infra",
 ]
 # importlib mode: several members have identically named test modules (test_import.py).
 addopts = ["--import-mode=importlib", "-ra", "--strict-markers"]

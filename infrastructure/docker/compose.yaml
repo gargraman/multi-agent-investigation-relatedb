@@ -1,5 +1,5 @@
 # Nexus core stack, `lite` profile (spec §16). No observability container here: the LGTM
-# overlay (compose.observability.yaml) arrives in S6. Agents join in S2/S3.
+# overlay (compose.observability.yaml) arrives in S6. SIGINT joins in S2; GEOINT/analysis in S3/S4.
 #
 #   make secrets && make up      # from the repo root
 #
@@ -29,6 +29,7 @@ services:
       SERVICE_NAME: context-service
       SERVICE_TOKEN: ${NEXUS_TOKEN_CONTEXT_SERVICE:?run make secrets}
       NEXUS_TOKEN_ORCHESTRATOR: ${NEXUS_TOKEN_ORCHESTRATOR:?run make secrets}
+      NEXUS_TOKEN_SIGINT_AGENT: ${NEXUS_TOKEN_SIGINT_AGENT:?run make secrets}
       RELATE_STORE_PATH: /data/relate
     volumes:
       - relate-store:/data          # only this service mounts the store (AC5)
@@ -55,10 +56,53 @@ services:
       # S1: nothing leaves CREATED until the workflow lands (S3), so the spec default of 2 would
       # block the third create. Restore the default of 2 in S3.
       NEXUS_MAX_CONCURRENT_INVESTIGATIONS: ${NEXUS_MAX_CONCURRENT_INVESTIGATIONS:-20}
+      NEXUS_ENABLED_AGENTS: sigint-agent
+      NEXUS_AGENT_URLS: '{"sigint-agent":"http://sigint-agent:8000"}'
     volumes:
       - orchestrator-state:/data
       - ../../data/scenarios:/app/data/scenarios:ro   # manifests only; never fixtures
     networks: [nexus-app, nexus-context]
+    depends_on:
+      context-service: {condition: service_healthy}
+      sigint-agent: {condition: service_healthy}
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512m}
+
+  sigint-agent:
+    build:
+      <<: *python-build
+      args:
+        PACKAGE: nexus-sigint
+        MODULE: nexus_sigint
+    image: nexus/sigint-agent:dev
+    environment:
+      <<: *common-env
+      SERVICE_NAME: sigint-agent
+      SERVICE_TOKEN: ${NEXUS_TOKEN_SIGINT_AGENT:?run make secrets}
+      NEXUS_TOKEN_ORCHESTRATOR: ${NEXUS_TOKEN_ORCHESTRATOR:?run make secrets}
+      CONTEXT_SERVICE_URL: http://context-service:8000
+      SQLITE_PATH: /data/sigint.sqlite
+      SCENARIOS_DIR: /app/data/scenarios
+      FIXTURES_DIR: /app/data/fixtures            # manifest `file:` paths resolve under here
+      REPLAY_DIR: /app/data/replay
+      # No runtime switch (ADR-006 E4): change mode by restarting (`make demo-replay`).
+      NEXUS_LLM_MODE: ${NEXUS_LLM_MODE:-live}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}          # required in live mode; startup refuses without it
+      OPENAI_MODEL_EXTRACT: ${OPENAI_MODEL_EXTRACT:-gpt-5.4-mini-2026-03-17}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-45}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
+      EXTRA_CA_FILE: /run/secrets/extra_ca         # empty file = no extra CA
+    secrets: [extra_ca]
+    volumes:
+      - sigint-state:/data
+      - ../../data/scenarios:/app/data/scenarios:ro
+      - ../../data/fixtures/sigint:/app/data/fixtures/sigint:ro      # own fixtures only (§6.3)
+      - ../../data/replay/sigint-agent:/app/data/replay/sigint-agent:ro
+    # nexus-context: orchestrator <-> agent <-> Context Service (internal, no egress).
+    # nexus-egress: OpenAI only. Not on nexus-app, so the frontend cannot reach the agent.
+    networks: [nexus-context, nexus-egress]
     depends_on:
       context-service: {condition: service_healthy}
     stop_grace_period: 15s
@@ -85,11 +129,16 @@ services:
 secrets:
   npm_ca:
     file: ${NODE_EXTRA_CA_CERTS:-/dev/null}
+  # Runtime CA bundle for TLS-intercepting proxies (OpenAI egress). Mounted, never baked in.
+  extra_ca:
+    file: ${SSL_CERT_FILE:-/dev/null}
 
 networks:
   nexus-app: {}
   nexus-context: {internal: true}
+  nexus-egress: {}
 
 volumes:
   relate-store: {}
   orchestrator-state: {}
+  sigint-state: {}
