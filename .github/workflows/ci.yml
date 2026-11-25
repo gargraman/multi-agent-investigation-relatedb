@@ -1,0 +1,63 @@
+# CI: the same checks as `make test` / `make lint`, plus the frontend checks.
+# No secrets: the live-LLM test is opt-in (NEXUS_LIVE_LLM_TESTS=1) and skips here.
+# Not run here: Playwright e2e and `make up` (both need the Compose stack).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python (pytest, ruff, drift checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DO_NOT_TRACK: "1"  # relate-db telemetry off
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Python 3.12
+        run: uv python install 3.12
+      - name: Sync workspace (lockfile must be current)
+        run: uv sync --all-packages --locked
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format --check
+        run: uv run ruff format --check .
+      - name: pytest (includes schema and scenario drift checks)
+        run: uv run pytest -q
+
+  frontend:
+    name: frontend (types, lint, unit, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"  # matches NODE_IMAGE in apps/frontend/Dockerfile
+          cache: npm
+          cache-dependency-path: apps/frontend/package-lock.json
+      - run: npm ci
+      - name: Generated TS types match contracts/schemas
+        run: |
+          npm run gen:types
+          git diff --exit-code -- src/api/generated
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:unit
+      - run: npm run build
