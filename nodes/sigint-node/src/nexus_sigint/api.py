@@ -23,11 +23,12 @@ from nexus_contracts.a2a.task import AgentCard, TaskRequest, TaskResult, TaskSub
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
 from nexus_contracts.common import AgentId, Classification
+from nexus_shared.agent.catalog import ManifestCatalog
+from nexus_shared.agent.store import SubmitDecision, TaskStore
 from nexus_shared.security import ORCHESTRATOR, TokenRegistry
 from nexus_sigint import __version__, pipeline
-from nexus_sigint.runner import ManifestCatalog, TaskRunner
+from nexus_sigint.runner import TaskRunner
 from nexus_sigint.settings import SigintSettings
-from nexus_sigint.store import SubmitDecision, TaskStore
 
 log = logging.getLogger(__name__)
 

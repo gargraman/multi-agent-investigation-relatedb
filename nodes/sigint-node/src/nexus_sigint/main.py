@@ -23,6 +23,9 @@ from fastapi import FastAPI
 from opentelemetry.sdk.trace.export import SpanExporter
 
 from nexus_contracts.common import LlmMode
+from nexus_shared.agent.catalog import ManifestCatalog
+from nexus_shared.agent.context_client import ContextServiceClient
+from nexus_shared.agent.store import TaskStore
 from nexus_shared.llm import LLMProvider, ReplayLLMProvider
 from nexus_shared.logging import configure_logging
 from nexus_shared.security import TokenRegistry
@@ -34,10 +37,8 @@ from nexus_shared.telemetry import (
 )
 from nexus_sigint import __version__
 from nexus_sigint.api import install_error_handlers, router
-from nexus_sigint.context_client import ContextServiceClient
-from nexus_sigint.runner import ManifestCatalog, TaskRunner
+from nexus_sigint.runner import TaskRunner
 from nexus_sigint.settings import SigintSettings, load_token_registry
-from nexus_sigint.store import TaskStore
 
 log = logging.getLogger(__name__)
 

@@ -21,6 +21,12 @@ llm = [
     "certifi>=2024.2.2",
     "openai>=3.59,<4",
 ]
+# Specialist-agent runtime (nexus_shared.agent): task store, Context Service client, catalog.
+agent = [
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.165.0",
+    "nexus-shared[llm]",
+]
 
 [tool.uv.sources]
 nexus-contracts = { workspace = true }

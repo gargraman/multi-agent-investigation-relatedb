@@ -6,8 +6,8 @@ import pytest
 
 from nexus_contracts.a2a.task import AgentTaskStatus
 from nexus_contracts.common import LlmMode
-from nexus_sigint.settings import SigintSettings
-from nexus_sigint.store import SubmitDecision, TaskStore
+from nexus_shared.agent.settings import AgentSettings
+from nexus_shared.agent.store import SubmitDecision, TaskStore
 
 from .conftest import make_request
 
@@ -64,6 +64,6 @@ async def test_cas_update_rejects_moved_version(tmp_path: Path) -> None:
 
 def test_live_mode_requires_key() -> None:
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        SigintSettings(service_token="s" * 40, nexus_llm_mode="live")
-    ok = SigintSettings(service_token="s" * 40, nexus_llm_mode="replay")
+        AgentSettings(service_name="test-agent", service_token="s" * 40, nexus_llm_mode="live")
+    ok = AgentSettings(service_name="test-agent", service_token="s" * 40, nexus_llm_mode="replay")
     assert ok.fixtures_dir == Path("data/fixtures") and ok.replay_dir == Path("data/replay")

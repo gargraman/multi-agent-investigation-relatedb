@@ -6,23 +6,13 @@ import httpx
 
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.findings import FindingBatchRequest
-from nexus_shared.llm import TokenBudget
-from nexus_sigint.context_client import ContextServiceClient
-from nexus_sigint.pipeline import run
+from nexus_shared.agent.context_client import ContextServiceClient
 
-from .conftest import FIXTURES, FakeProvider, make_request, manifest_for, valid_output
+from .conftest import make_batch
 
 
 async def _batch() -> FindingBatchRequest:
-    out = await run(
-        make_request(),
-        provider=FakeProvider(valid_output(2)),
-        manifest=manifest_for("baseline-corroboration"),
-        fixtures_root=FIXTURES,
-        budget=TokenBudget(15000),
-    )
-    assert out.batch is not None
-    return out.batch
+    return make_batch()
 
 
 def _client(handler: Callable[[httpx.Request], httpx.Response]) -> ContextServiceClient:

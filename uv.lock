@@ -581,6 +581,12 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+agent = [
+    { name = "aiosqlite" },
+    { name = "certifi" },
+    { name = "fastapi" },
+    { name = "openai" },
+]
 llm = [
     { name = "certifi" },
     { name = "openai" },
@@ -588,9 +594,12 @@ llm = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiosqlite", marker = "extra == 'agent'", specifier = ">=0.22.1" },
     { name = "certifi", marker = "extra == 'llm'", specifier = ">=2024.2.2" },
+    { name = "fastapi", marker = "extra == 'agent'", specifier = ">=0.165.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "nexus-contracts", editable = "contracts" },
+    { name = "nexus-shared", extras = ["llm"], marker = "extra == 'agent'" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=3.59,<4" },
     { name = "opentelemetry-api", specifier = ">=1.45.2" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.45.2" },
@@ -599,28 +608,26 @@ requires-dist = [
     { name = "opentelemetry-sdk", specifier = ">=1.45.2" },
     { name = "pydantic-settings", specifier = ">=2.16.3" },
 ]
-provides-extras = ["llm"]
+provides-extras = ["llm", "agent"]
 
 [[package]]
 name = "nexus-sigint"
 version = "0.1.0"
 source = { editable = "nodes/sigint-node" }
 dependencies = [
-    { name = "aiosqlite" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "nexus-contracts" },
-    { name = "nexus-shared", extra = ["llm"] },
+    { name = "nexus-shared", extra = ["agent"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "fastapi", specifier = ">=0.165.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "nexus-contracts", editable = "contracts" },
-    { name = "nexus-shared", extras = ["llm"], editable = "shared" },
+    { name = "nexus-shared", extras = ["agent"], editable = "shared" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 
