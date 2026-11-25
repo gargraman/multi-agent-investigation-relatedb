@@ -40,6 +40,10 @@ class InvestigationStatusChanged(ValueModel):
     from_status: InvestigationStatus | None = None
     to_status: InvestigationStatus
     reason: ErrorCode | None = None
+    skipped_agents: list[AgentId] = Field(
+        default_factory=list,
+        description="Template agents not enabled in this deployment; no task rows (S2 spec G1).",
+    )
 
 
 class TaskStatusChanged(ValueModel):

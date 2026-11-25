@@ -36,7 +36,10 @@ export type ErrorCode =
   | "replay_objective_locked"
   | "content_conflict"
   | "replay_miss"
-  | "analysis_policy_unmet";
+  | "analysis_policy_unmet"
+  | "agent_not_enabled"
+  | "context_unavailable"
+  | "submission_rejected";
 /**
  * Stable agent identifiers (spec §12.2 example: ``sigint-agent``).
  *
@@ -55,6 +58,13 @@ export type ErrorCategory =
   "llm" | "evidence" | "budget" | "deadline" | "lifecycle" | "policy" | "conflict" | "validation";
 export type FindingIds = string[];
 export type Id1 = string;
+/**
+ * LLM provider mode (spec §13.2/§13.3, ADR-006 E3). Wire values are lower-case.
+ *
+ * This interface was referenced by `Investigation`'s JSON-Schema
+ * via the `definition` "LlmMode".
+ */
+export type LlmMode = "live" | "replay";
 /**
  * What the orchestrator knows about a task (§8.2), including ``PENDING``/``TIMED_OUT``.
  *
@@ -101,6 +111,10 @@ export interface TaskView {
   error_code?: ErrorCode | null;
   finding_ids?: FindingIds;
   id: Id1;
+  /**
+   * Mode the agent reported for this attempt (ADR-006 E8).
+   */
+  llm_mode?: LlmMode | null;
   status: OrchestratorTaskState;
   status_reason?: ErrorCode | null;
   task_type: TaskType;

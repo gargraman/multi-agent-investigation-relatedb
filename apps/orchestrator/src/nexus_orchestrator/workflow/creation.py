@@ -1,10 +1,22 @@
-"""Investigation creation and the S1 resume sweep (spec §8.1 steps 1-3, §8.6; ADR-002 A1).
+"""Investigation creation, start and the resume sweep (spec §8.1 steps 1-4, §8.6; ADR-002 A1;
+S2 spec FR-002, FR-008).
 
-S1 scope: no tasks and no workflow engine yet. An investigation is inserted ``CREATED`` (with its
-timeline event, one transaction), then registered with the Context Service **after** commit.
-Whether or not that call succeeds the status stays ``CREATED``; the Context Service create is
-idempotent on ``investigation_id``, so the startup sweep (and a background retrier for transient
-failures) simply re-POSTs it.
+1. Insert ``CREATED`` (with its timeline event, one transaction).
+2. Register with the Context Service **after** commit. If that fails the status stays
+   ``CREATED``; the create is idempotent on ``investigation_id``, so the startup sweep and a
+   background retrier simply re-POST it.
+3. Once registered, **start** in one transaction (FR-002, G1): ``CREATED → RUNNING`` with
+   ``skipped_agents`` (template agents not in ``NEXUS_ENABLED_AGENTS``) on the event, then one
+   ``PENDING`` task row (attempt 1) per enabled template task, each with its own
+   ``task.status_changed``. With no enabled template agent the same transaction ends it
+   ``RUNNING → FAILED (agent_not_enabled)`` (``workflow/terminal.py``).
+4. Hand the investigation to the poller, which dispatches and polls (``workflow/poller.py``).
+
+Resume sweep (§8.6, ADR-008 F1): ``CREATED`` → re-register → start; ``RUNNING`` → a new driver
+that re-POSTs ``PENDING`` tasks (same attempt) and polls ``DISPATCHED``/``RUNNING`` ones.
+
+E4 (FR-008): while any enabled agent's card says ``llm_mode=replay``, an objective other than the
+template's is refused (``ReplayObjectiveLocked`` → ``422 replay_objective_locked``).
 
 Tracing (ADR-008 F9): one ``workflow.create`` span per create. Its context is stored in
 ``investigations.trace_context_json``; resume spans link back to it.
@@ -16,6 +28,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 from datetime import timedelta
 
 from opentelemetry import propagate, trace
@@ -26,16 +39,19 @@ from nexus_contracts.api.investigations import Investigation, InvestigationCreat
 from nexus_contracts.api.states import InvestigationStatus
 from nexus_contracts.events.timeline import InvestigationStatusChanged, TimelineEventType
 from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_orchestrator.delegation.agent_registry import AgentRegistry
 from nexus_orchestrator.delegation.context_client import (
     ContextServiceClient,
     RegistrationOutcome,
     RegistrationResult,
 )
-from nexus_orchestrator.ids import new_investigation_id, utcnow
+from nexus_orchestrator.ids import new_investigation_id, new_task_id, utcnow
 from nexus_orchestrator.scenarios import ScenarioCatalog
 from nexus_orchestrator.settings import OrchestratorSettings
 from nexus_orchestrator.state.db import Database
 from nexus_orchestrator.state.repository import Repository
+from nexus_orchestrator.workflow import terminal
+from nexus_orchestrator.workflow.poller import Poller
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +64,10 @@ class ConcurrencyLimitReached(RuntimeError):
     pass
 
 
+class ReplayObjectiveLocked(ValueError):
+    pass
+
+
 class InvestigationWorkflow:
     def __init__(
         self,
@@ -57,6 +77,8 @@ class InvestigationWorkflow:
         catalog: ScenarioCatalog,
         context: ContextServiceClient,
         tracer: Tracer,
+        poller: Poller,
+        registry: AgentRegistry,
     ) -> None:
         self.settings = settings
         self.db = db
@@ -64,6 +86,8 @@ class InvestigationWorkflow:
         self.catalog = catalog
         self.context = context
         self.tracer = tracer
+        self.poller = poller
+        self.registry = registry
         self.pending_registration: set[str] = set()
         self._retry_task: asyncio.Task[None] | None = None
 
@@ -73,6 +97,14 @@ class InvestigationWorkflow:
         manifest = await self.catalog.get(request.scenario_id)
         if manifest is None:
             raise ScenarioNotFound(request.scenario_id)
+        if (
+            request.objective is not None
+            and request.objective != manifest.objective
+            and self.registry.replay_locked
+        ):
+            raise ReplayObjectiveLocked(
+                "an agent is in replay mode: only the scenario's template objective can be used"
+            )
         objective = request.objective or manifest.objective
         investigation_id = new_investigation_id()
         now = utcnow()
@@ -115,7 +147,7 @@ class InvestigationWorkflow:
             # After commit, outside any transaction (ADR-002 A3).
             result = await self._register(investigation_id, manifest, objective)
             span.set_attribute("nexus.context.registration", result.outcome.value)
-        return investigation
+        return await self.repo.get_investigation(investigation_id) or investigation
 
     async def _register(
         self, investigation_id: str, manifest: ScenarioManifest, objective: str
@@ -131,6 +163,7 @@ class InvestigationWorkflow:
         if result.outcome is RegistrationOutcome.REGISTERED:
             self.pending_registration.discard(investigation_id)
             log.info("investigation registered with Context Service", extra=extra)
+            await self.begin(investigation_id, manifest)
         elif result.retryable:
             self.pending_registration.add(investigation_id)
             log.warning("Context Service create failed; will retry", extra=extra)
@@ -140,17 +173,74 @@ class InvestigationWorkflow:
             log.error("Context Service rejected investigation create", extra=extra)
         return result
 
+    # -- begin (FR-002, G1) --------------------------------------------------------------------
+
+    async def begin(self, investigation_id: str, manifest: ScenarioManifest) -> None:
+        """CREATED → RUNNING plus the task rows, in one transaction; then hand to the poller."""
+        enabled = set(self.settings.nexus_enabled_agents)
+        now = utcnow()
+        async with self.db.transaction() as tx:
+            inv = await self.repo.tx_investigation_record(tx, investigation_id)
+            if inv is None or inv.status is not InvestigationStatus.CREATED:
+                return  # already started (e.g. a racing retrier) or ended
+            skipped = [t.agent for t in manifest.template.tasks if t.agent not in enabled]
+            await self.repo.transition_investigation(
+                tx, investigation_id, InvestigationStatus.RUNNING, now=now, skipped_agents=skipped
+            )
+            deadline = min(
+                now + timedelta(seconds=self.settings.task_deadline_seconds), inv.deadline
+            )
+            for template in manifest.template.tasks:
+                if template.agent not in enabled:
+                    continue
+                await self.repo.insert_task(
+                    tx,
+                    task_id=new_task_id(),
+                    investigation_id=investigation_id,
+                    agent_id=template.agent,
+                    task_type=template.task_type,
+                    deadline=deadline,
+                    # §8.5 / ADR-008 F5: share × cap (SIGINT 0.25 × 60000 = 15000).
+                    token_reservation=math.floor(
+                        template.token_share * self.settings.nexus_max_tokens_per_investigation
+                    ),
+                    now=now,
+                )
+            tasks = await self.repo.tx_task_records(tx, investigation_id)
+            decision = terminal.decide(
+                [terminal.TaskOutcome(t.agent_id, t.status) for t in tasks], skipped
+            )
+            if decision is not None:  # only when no template agent is enabled
+                await self.repo.transition_investigation(
+                    tx, investigation_id, decision.status, now=now, reason=decision.reason
+                )
+        log.info(
+            "investigation started",
+            extra={
+                "investigation_id": investigation_id,
+                "tasks": len(tasks),
+                "skipped_agents": [a.value for a in skipped],
+            },
+        )
+        if decision is None:
+            self.poller.ensure(investigation_id)
+
     # -- resume (ADR-002 A1) ------------------------------------------------------------------
 
     async def resume_sweep(self) -> dict[str, int]:
-        """Re-POST the idempotent create for every ``CREATED`` investigation. Never raises for
-        Context Service failures: those go to the background retrier."""
+        """Re-POST the idempotent create for every ``CREATED`` investigation (and start it once
+        registered); start a driver for every ``RUNNING`` one. Never raises for Context Service
+        or agent failures: those go to the background retrier / the drivers."""
         ids = await self.repo.list_ids_with_status(InvestigationStatus.CREATED)
         manifests = await self.catalog.all()
         counts = {o.value: 0 for o in RegistrationOutcome} | {"skipped": 0}
         for investigation_id in ids:
             outcome = await self._resume_one(investigation_id, manifests)
             counts[outcome] += 1
+        running = await self.repo.list_ids_with_status(InvestigationStatus.RUNNING)
+        for investigation_id in running:
+            self.poller.ensure(investigation_id)
+        counts["running_resumed"] = len(running)
         log.info("resume sweep finished", extra={"investigations": len(ids), **counts})
         return counts
 

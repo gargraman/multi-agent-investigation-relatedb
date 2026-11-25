@@ -2,6 +2,7 @@
 
 import logging
 from http import HTTPStatus
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -26,6 +27,7 @@ class ProblemError(Exception):
         code: ErrorCode | None = None,
         errors: list[FieldError] | None = None,
         headers: dict[str, str] | None = None,
+        extensions: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(detail or HTTPStatus(status).phrase)
         self.status = status
@@ -33,6 +35,7 @@ class ProblemError(Exception):
         self.code = code
         self.errors = errors
         self.headers = headers
+        self.extensions = extensions  # extra RFC 7807 members, e.g. finding_ids on 409
 
 
 def problem_response(
@@ -43,6 +46,7 @@ def problem_response(
     code: str | None = None,
     errors: list[FieldError] | None = None,
     headers: dict[str, str] | None = None,
+    extensions: dict[str, Any] | None = None,
 ) -> JSONResponse:
     body = ProblemDetails(
         title=HTTPStatus(status).phrase,
@@ -51,6 +55,7 @@ def problem_response(
         instance=request.url.path,
         code=code,
         errors=errors,
+        **(extensions or {}),
     )
     return JSONResponse(
         body.model_dump(mode="json", exclude_none=True),
@@ -82,6 +87,7 @@ def install_error_handlers(app: FastAPI) -> None:
             code=exc.code.value if exc.code else None,
             errors=exc.errors,
             headers=exc.headers,
+            extensions=exc.extensions,
         )
 
     @app.exception_handler(RequestValidationError)

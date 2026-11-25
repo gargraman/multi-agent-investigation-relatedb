@@ -25,7 +25,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA = REPO_ROOT / "data"
-SCENARIOS = ["baseline-corroboration", "contradiction"]
+SCENARIOS = ["baseline-corroboration", "contradiction", "prompt-injection"]
 
 
 def _ts(value: str) -> datetime:

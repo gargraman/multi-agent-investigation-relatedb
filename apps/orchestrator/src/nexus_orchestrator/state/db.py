@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -32,7 +32,11 @@ PRAGMAS = (
 _INV_STATUSES = "'CREATED','RUNNING','ANALYZING','COMPLETED','PARTIAL','FAILED','CANCELLED'"
 _TASK_STATUSES = "'PENDING','DISPATCHED','RUNNING','COMPLETED','FAILED','TIMED_OUT','CANCELLED'"
 
-# Exactly the §8.7 columns. Idempotent: safe to run on every start.
+# S2 addition (not in §8.7): the agent-reported ``llm_mode`` behind ``TaskView.llm_mode``
+# (ADR-006 E8). Appended last so an S1 database is migrated with one ALTER TABLE.
+_LLM_MODE_CHECK = " CHECK (llm_mode IS NULL OR llm_mode IN ('live', 'replay'))"
+
+# The §8.7 columns (plus tasks.llm_mode, above). Idempotent: safe to run on every start.
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS investigations (
     id                 TEXT PRIMARY KEY,
@@ -70,7 +74,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     error_code        TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
-    version           INTEGER NOT NULL DEFAULT 1
+    version           INTEGER NOT NULL DEFAULT 1,
+    llm_mode          TEXT{_LLM_MODE_CHECK}
 );
 CREATE INDEX IF NOT EXISTS ix_tasks_investigation ON tasks (investigation_id);
 
@@ -89,6 +94,23 @@ CREATE TABLE IF NOT EXISTS timeline_events (
 );
 CREATE INDEX IF NOT EXISTS ix_timeline_investigation_seq ON timeline_events (investigation_id, seq);
 """
+
+
+async def _settle[T](aw: Awaitable[T]) -> tuple[T, bool]:
+    """Await ``aw`` to completion even if the caller is cancelled meanwhile.
+
+    Returns ``(result, interrupted)``; ``interrupted`` is True if a cancel arrived, so the caller
+    can re-raise it once the database is in a known state.
+    """
+    task = asyncio.ensure_future(aw)
+    interrupted = False
+    while True:
+        try:
+            return await asyncio.shield(task), interrupted
+        except asyncio.CancelledError:
+            if task.done():  # the inner operation itself was cancelled or failed
+                return task.result(), True
+            interrupted = True
 
 
 class Transaction:
@@ -133,7 +155,16 @@ class Database:
         self._write_lock = asyncio.Lock()
         self._writer = await self._connect()
         await self._writer.executescript(SCHEMA)
+        await self._migrate(self._writer)
         self._reader = await self._connect()
+
+    @staticmethod
+    async def _migrate(conn: aiosqlite.Connection) -> None:
+        """Additive, idempotent column migrations for databases created by older builds."""
+        async with conn.execute("PRAGMA table_info(tasks)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "llm_mode" not in columns:
+            await conn.execute(f"ALTER TABLE tasks ADD COLUMN llm_mode TEXT{_LLM_MODE_CHECK}")
 
     async def close(self) -> None:
         for conn in (self._reader, self._writer):
@@ -147,28 +178,49 @@ class Database:
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[Transaction]:
-        """``BEGIN IMMEDIATE`` … ``COMMIT`` on the single writer. Rolls back on any error."""
+        """``BEGIN IMMEDIATE`` … ``COMMIT`` on the single writer. Rolls back on any error.
+
+        Cancellation safety: aiosqlite runs each statement on a worker thread, and cancelling
+        the awaiting coroutine does **not** stop a statement that is already queued. So a
+        cancel that lands while ``BEGIN IMMEDIATE`` is queued used to see
+        ``in_transaction == False``, skip the rollback, and leave the writer inside a
+        transaction once the BEGIN ran (every later ``BEGIN`` then failed with "cannot start a
+        transaction within a transaction"). Now the rollback first drains the worker queue, and
+        ``COMMIT`` is run to completion even if a cancel arrives, so the outcome is known; the
+        cancel is re-raised afterwards.
+        """
         assert self._writer is not None and self._write_lock is not None, "database not open"
         async with self._write_lock:
             conn = self._writer
-            await conn.execute("BEGIN IMMEDIATE")
             tx = Transaction(conn)
             try:
+                await conn.execute("BEGIN IMMEDIATE")
                 yield tx
-                await self._commit(conn)
-            except BaseException:
-                if conn.in_transaction:
-                    await conn.execute("ROLLBACK")
+                _, interrupted = await _settle(self._commit(conn))
+            except BaseException as exc:
+                _, interrupted = await _settle(self._rollback(conn))
+                if interrupted and not isinstance(exc, asyncio.CancelledError):
+                    raise asyncio.CancelledError() from exc
                 raise
             for fn in tx._after_commit:
                 try:
                     fn()
                 except Exception:  # a broken subscriber must not undo a committed write
                     log.exception("post-commit hook failed")
+            if interrupted:
+                raise asyncio.CancelledError()
 
     async def _commit(self, conn: aiosqlite.Connection) -> None:
         """Separate method so tests can inject a commit failure."""
         await conn.execute("COMMIT")
+
+    @staticmethod
+    async def _rollback(conn: aiosqlite.Connection) -> None:
+        # Barrier: statements run in order on the worker thread, so once this returns any
+        # statement whose await was cancelled (e.g. a queued BEGIN) has really executed.
+        await (await conn.execute("SELECT 1")).close()
+        if conn.in_transaction:
+            await conn.execute("ROLLBACK")
 
     async def fetchall(self, sql: str, params: Iterable[Any] = ()) -> list[aiosqlite.Row]:
         assert self._reader is not None, "database not open"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import timedelta
 
 import pytest
@@ -52,12 +53,17 @@ SPEC_COLUMNS = {
         "created_at",
         "updated_at",
         "version",
+        "llm_mode",  # S2 addition (TaskView.llm_mode); not in §8.7, appended last
     ],
     "leader": ["id", "holder", "heartbeat_at"],
     "timeline_events": ["seq", "investigation_id", "type", "payload_json", "created_at"],
 }
 
 FAST = LeaderTimings(heartbeat_seconds=0.05, stale_seconds=0.3, wait_seconds=0.3, poll_seconds=0.02)
+# Fresh-lock tests must never see the holder as stale. Both "processes" share one event loop
+# here, so under CPU load a heartbeat gap > 0.3 s made a live holder look dead and the second
+# instance took over (a real flake). Staleness itself is tested separately below.
+FRESH = LeaderTimings(heartbeat_seconds=0.05, stale_seconds=30, wait_seconds=0.3, poll_seconds=0.02)
 
 
 @pytest.fixture
@@ -100,8 +106,8 @@ async def test_second_instance_blocked_by_fresh_lock(tmp_path) -> None:
     a, b = Database(tmp_path / "l.sqlite"), Database(tmp_path / "l.sqlite")
     await a.open()
     await b.open()
-    first = LeaderLock(a, FAST, holder="first")
-    second = LeaderLock(b, FAST, holder="second")
+    first = LeaderLock(a, FRESH, holder="first")
+    second = LeaderLock(b, FRESH, holder="second")
     try:
         await first.acquire()
         with pytest.raises(LeaderLockError, match=LOCK_HELD_MESSAGE):
@@ -157,7 +163,7 @@ async def test_second_app_fails_startup_while_first_holds_lock(make_app) -> None
     first = make_app(fake)
     async with running(first) as client:
         assert (await client.get("/readyz")).status_code == 200
-        second = make_app(fake)
+        second = make_app(fake, leader_stale_seconds=30)  # see FRESH
         with pytest.raises(LeaderLockError):
             async with running(second):
                 pass
@@ -165,3 +171,27 @@ async def test_second_app_fails_startup_while_first_holds_lock(make_app) -> None
     third = make_app(fake, leader_wait_seconds=0)
     async with running(third) as client:
         assert (await client.get("/readyz")).status_code == 200
+
+
+@pytest.mark.parametrize("yields", [0, 1, 2, 3, 5, 8])
+async def test_cancelled_transaction_never_leaves_the_writer_inside_a_transaction(
+    db, yields: int
+) -> None:
+    """Root cause of the leader-lock flake: a cancel while ``BEGIN IMMEDIATE`` (or COMMIT) is
+    still queued on aiosqlite's worker thread left the writer mid-transaction, so the next
+    ``BEGIN`` (the leader release) failed with "cannot start a transaction within a
+    transaction" and the leader row was never deleted."""
+
+    async def heartbeat_like() -> None:
+        async with db.transaction() as tx:
+            await tx.execute("INSERT OR REPLACE INTO leader VALUES (1, 'x', ?)", (iso(utcnow()),))
+
+    task = asyncio.create_task(heartbeat_like())
+    for _ in range(yields):
+        await asyncio.sleep(0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert not db._writer.in_transaction
+    async with db.transaction() as tx:  # the writer is usable again
+        await tx.execute("DELETE FROM leader")

@@ -21,7 +21,9 @@ async def create(client, scenario: str = SCENARIO, **extra):
     return await client.post("/api/v1/investigations", json={"scenario_id": scenario, **extra})
 
 
-async def test_create_returns_201_created_with_timeline_row_and_publishes(make_app) -> None:
+async def test_create_returns_201_running_with_task_and_timeline_rows(make_app) -> None:
+    """S2: registration succeeded, so the same request moved it to RUNNING with one SIGINT
+    task (the only enabled template agent); GEOINT and Analysis are listed as skipped."""
     fake = FakeContextService()
     app = make_app(fake)
     async with running(app) as client:
@@ -29,8 +31,10 @@ async def test_create_returns_201_created_with_timeline_row_and_publishes(make_a
         resp = await create(client)
         assert resp.status_code == 201, resp.text
         inv = Investigation.model_validate(resp.json())
-        assert inv.status == "CREATED"
-        assert inv.tasks == []
+        assert inv.status == "RUNNING"
+        [task] = inv.tasks
+        assert task.agent_id == "sigint-agent" and task.attempt == 1
+        assert task.status in {"PENDING", "DISPATCHED"}  # the driver may already have run
         assert inv.token_budget == 60000
         manifest = load_manifest(SCENARIOS_DIR / SCENARIO)
         assert inv.objective == manifest.objective
@@ -38,13 +42,29 @@ async def test_create_returns_201_created_with_timeline_row_and_publishes(make_a
         timeline = TimelinePage.model_validate(
             (await client.get(f"/api/v1/investigations/{inv.id}/timeline")).json()
         )
-        assert len(timeline.items) == 1
-        ev = timeline.items[0]
-        assert ev.type == "investigation.status_changed"
-        assert ev.payload == {"from_status": None, "to_status": "CREATED", "reason": None}
+        created, running_ev, pending = timeline.items[:3]
+        assert created.type == running_ev.type == "investigation.status_changed"
+        assert created.payload == {
+            "from_status": None,
+            "to_status": "CREATED",
+            "reason": None,
+            "skipped_agents": [],
+        }
+        assert running_ev.payload == {
+            "from_status": "CREATED",
+            "to_status": "RUNNING",
+            "reason": None,
+            "skipped_agents": ["geoint-agent", "analysis-agent"],
+        }
+        assert pending.type == "task.status_changed"
+        assert pending.payload["from_state"] is None
+        assert pending.payload["to_state"] == "PENDING"
+        assert created.seq < running_ev.seq < pending.seq
 
-        detail = await client.get(f"/api/v1/investigations/{inv.id}")
-        assert Investigation.model_validate(detail.json()) == inv
+        detail = Investigation.model_validate(
+            (await client.get(f"/api/v1/investigations/{inv.id}")).json()
+        )
+        assert detail.id == inv.id and detail.status == "RUNNING"
         assert rt.workflow.pending_registration == set()
 
 
@@ -74,7 +94,9 @@ async def test_event_published_only_after_commit(make_app, monkeypatch) -> None:
         published.clear()
         monkeypatch.setattr(rt.broker, "publish", published.append)
         assert (await create(client)).status_code == 201
-        assert [e.seq for e in published] == [published[0].seq] and len(published) == 1
+        assert published[0].payload["to_status"] == "CREATED"
+        seqs = [e.seq for e in published]
+        assert seqs == sorted(set(seqs))  # each committed event published once, in order
 
 
 async def test_outbound_create_has_traceparent_token_and_manifest_body(make_app, exporter) -> None:
@@ -129,7 +151,8 @@ async def test_context_service_down_stays_created_then_sweep_registers(make_app)
     async with running(app2) as client:
         assert inv_id in fake.registered
         detail = (await client.get(f"/api/v1/investigations/{inv_id}")).json()
-        assert detail["status"] == "CREATED"  # S1: no workflow beyond registration
+        assert detail["status"] == "RUNNING"  # S2: registration chains into dispatch
+        assert [t["agent_id"] for t in detail["tasks"]] == ["sigint-agent"]
         assert runtime(app2).workflow.pending_registration == set()
         assert (await client.get("/readyz")).status_code == 200
 
@@ -227,7 +250,7 @@ async def test_scenarios_list_exposes_metadata_only(make_app) -> None:
     async with running(app) as client:
         body = (await client.get("/api/v1/scenarios")).json()
     by_id = {s["id"]: s for s in body["items"]}
-    assert {"baseline-corroboration", "contradiction"} <= set(by_id)
+    assert {"baseline-corroboration", "contradiction", "prompt-injection"} <= set(by_id)
     s = by_id[SCENARIO]
     assert set(s) == {"id", "version", "objective", "task_count"}
     assert s["task_count"] == 3 and s["version"] == "1.0.0"
@@ -243,4 +266,10 @@ async def test_system_health(make_app, up: bool, expected: str) -> None:
         assert (await client.get("/readyz")).status_code == 200
     assert body["status"] == expected
     comps = {c["name"]: c["status"] for c in body["components"]}
-    assert comps == {"orchestrator": "OK", "context-service": "OK" if up else "DOWN"}
+    assert comps == {
+        "orchestrator": "OK",
+        "context-service": "OK" if up else "DOWN",
+        "sigint-agent": "OK",
+    }
+    [agent] = [c for c in body["components"] if c["name"] == "sigint-agent"]
+    assert agent["llm_mode"] == "live"

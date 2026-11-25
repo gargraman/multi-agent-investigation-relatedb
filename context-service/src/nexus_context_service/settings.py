@@ -12,14 +12,16 @@ from pathlib import Path
 from pydantic import Field, field_validator
 
 from nexus_shared.config import ServiceSettings
-from nexus_shared.security import ORCHESTRATOR, TokenRegistry
+from nexus_shared.security import ORCHESTRATOR, TokenRegistry, token_env_var
 
 DURABILITY_ENV = "RELATE_DURABILITY_MODE"
 
-# Callers whose bearer tokens this service accepts.
-# TODO(S2): add "sigint-agent", "geoint-agent", "analysis-agent" once findings/search/assessments
-# land; S1 only serves orchestrator endpoints, so only the orchestrator token is required.
-ACCEPTED_CALLERS: tuple[str, ...] = (ORCHESTRATOR,)
+# Callers whose bearer tokens this service requires at startup (S2 FR-045).
+ACCEPTED_CALLERS: tuple[str, ...] = (ORCHESTRATOR, "sigint-agent")
+# Callers whose tokens are accepted when configured, but not required yet: geoint-agent submits
+# findings from S3 on. Kept optional so an S2 stack without a GEOINT token still starts.
+# TODO(S4): analysis-agent (search/assessments/context with clearance filtering, spec §9.5).
+OPTIONAL_CALLERS: tuple[str, ...] = ("geoint-agent",)
 
 
 class DurabilityModeError(RuntimeError):
@@ -57,5 +59,11 @@ class ContextServiceSettings(ServiceSettings):
 
 
 def load_token_registry(env: Mapping[str, str] | None = None) -> TokenRegistry:
-    """Tokens of every accepted caller; a missing/short token raises (startup error)."""
-    return TokenRegistry.from_env(ACCEPTED_CALLERS, env)
+    """Tokens of every accepted caller; a missing/short required token raises (startup error).
+
+    An optional caller's token is loaded when set; set-but-short is still a startup error."""
+    env = os.environ if env is None else env
+    required = TokenRegistry.from_env(ACCEPTED_CALLERS, env)
+    present = [c for c in OPTIONAL_CALLERS if env.get(token_env_var(c))]
+    optional = TokenRegistry.from_env(present, env)  # raises on a short token
+    return TokenRegistry({**required.tokens, **optional.tokens})

@@ -1,4 +1,5 @@
-"""HTTP routes (spec §12.3). S1: investigation create/close + health probes."""
+"""HTTP routes (spec §12.3). S1: investigation create/close + health probes. S2: findings batch
+and the investigation context read model."""
 
 from __future__ import annotations
 
@@ -10,7 +11,9 @@ from fastapi.responses import JSONResponse
 from nexus_context_service.auth import authorize
 from nexus_context_service.errors import ProblemError
 from nexus_context_service.repository import (
+    AlreadyCommitted,
     AuditContext,
+    BatchInvalid,
     GraphRepository,
     InvestigationClosed,
     InvestigationContentConflict,
@@ -21,9 +24,15 @@ from nexus_contracts.api.context import (
     ContextInvestigationClosed,
     ContextInvestigationCreate,
     ContextInvestigationCreated,
+    InvestigationContext,
 )
 from nexus_contracts.api.errors import ErrorCode
-from nexus_contracts.api.problem import FieldError
+from nexus_contracts.api.findings import (
+    AlreadyCommittedProblem,
+    FindingBatchRequest,
+    FindingBatchResponse,
+)
+from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
 from nexus_contracts.common import EntityType
 
 router = APIRouter()
@@ -124,5 +133,78 @@ async def close_investigation(
 ) -> ContextInvestigationClosed:
     try:
         return await repo.close_investigation(id, body, audit)
+    except InvestigationNotFound as exc:
+        raise ProblemError(404, "investigation not found") from exc
+
+
+def _problem_doc(model: type, description: str) -> dict:
+    """OpenAPI entry for an error response (served as application/problem+json)."""
+    return {"model": model, "description": f"{description} ({PROBLEM_JSON_MEDIA_TYPE})"}
+
+
+@router.post(
+    "/v1/findings:batch",
+    response_model=FindingBatchResponse,
+    status_code=201,
+    responses={
+        200: {"description": "Identical batch replayed for this task_id: original finding ids"},
+        404: _problem_doc(ProblemDetails, "Unknown investigation"),
+        409: _problem_doc(
+            AlreadyCommittedProblem,
+            "already_committed (different content; carries the committed finding_ids) or "
+            "investigation_cancelled (investigation is CLOSED; ProblemDetails)",
+        ),
+        422: _problem_doc(ProblemDetails, "schema_invalid or evidence_integrity_error"),
+    },
+)
+async def submit_findings(
+    body: FindingBatchRequest,
+    response: Response,
+    audit: Annotated[AuditContext, Depends(authorize("findings.submit"))],
+    repo: Annotated[GraphRepository, Depends(_repo)],
+    _: Annotated[None, Depends(_require_ready)],
+) -> FindingBatchResponse:
+    """S2 FR-040–FR-043: one lane transaction, idempotent on ``findings:{task_id}``. The replay
+    check runs before the CLOSED fence (G15)."""
+    try:
+        result = await repo.submit_finding_batch(body, audit)
+    except InvestigationNotFound as exc:
+        raise ProblemError(404, "investigation not found") from exc
+    except AlreadyCommitted as exc:
+        raise ProblemError(
+            409,
+            "a batch with different content was already committed for this task",
+            code=ErrorCode.ALREADY_COMMITTED,
+            extensions={"finding_ids": exc.finding_ids},
+        ) from exc
+    except InvestigationClosed as exc:
+        raise ProblemError(
+            409, "investigation is closed", code=ErrorCode.INVESTIGATION_CANCELLED
+        ) from exc
+    except BatchInvalid as exc:
+        code = (
+            ErrorCode.EVIDENCE_INTEGRITY_ERROR if exc.integrity_error else ErrorCode.SCHEMA_INVALID
+        )
+        raise ProblemError(
+            422, "findings batch failed validation", code=code, errors=exc.errors
+        ) from exc
+    if not result.created:
+        response.status_code = 200
+    return FindingBatchResponse(task_id=body.task_id, finding_ids=result.finding_ids)
+
+
+@router.get(
+    "/v1/investigations/{id}/context",
+    response_model=InvestigationContext,
+    responses={404: _problem_doc(ProblemDetails, "Unknown investigation")},
+)
+async def investigation_context(
+    id: Annotated[str, Path(pattern=INVESTIGATION_ID_PATTERN)],
+    audit: Annotated[AuditContext, Depends(authorize("investigations.context"))],
+    repo: Annotated[GraphRepository, Depends(_repo)],
+    _: Annotated[None, Depends(_require_ready)],
+) -> InvestigationContext:
+    try:
+        return await repo.get_context(id)
     except InvestigationNotFound as exc:
         raise ProblemError(404, "investigation not found") from exc

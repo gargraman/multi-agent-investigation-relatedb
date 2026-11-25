@@ -1,6 +1,10 @@
 """SSE timeline (ADR-005 D3): replay from Last-Event-ID, then live, no gap and no duplicate.
 
 Runs the app under a real uvicorn server because httpx's ASGITransport buffers whole bodies.
+
+Stream-mechanics tests run with no enabled agent (``QUIET``): the investigation goes
+CREATED → RUNNING → FAILED(agent_not_enabled) inside the create call, so no background driver
+writes events while the test counts them.
 """
 
 from __future__ import annotations
@@ -10,10 +14,12 @@ import json
 from collections.abc import AsyncIterator
 
 import httpx
-from orch_testkit import SCENARIO, FakeContextService, runtime, served
+from orch_testkit import SCENARIO, FakeAgent, FakeContextService, runtime, served, wait_until
 
 from nexus_contracts.events.timeline import TimelineEvent, TimelineEventType
 from nexus_orchestrator.ids import utcnow
+
+QUIET = {"nexus_enabled_agents": ()}
 
 
 async def sse_events(resp: httpx.Response) -> AsyncIterator[dict]:
@@ -60,11 +66,11 @@ async def collect(events: AsyncIterator[dict], count: int, timeout: float = 5) -
 
 
 async def test_replay_from_last_event_id_then_live_without_duplicates(make_app) -> None:
-    app = make_app(FakeContextService())
+    app = make_app(FakeContextService(), **QUIET)
     async with served(app) as base, httpx.AsyncClient(base_url=base, timeout=10) as client:
         inv = (await client.post("/api/v1/investigations", json={"scenario_id": SCENARIO})).json()
         first = await client.get(f"/api/v1/investigations/{inv['id']}/timeline")
-        created_seq = first.json()["items"][0]["seq"]
+        created_seq = first.json()["items"][-1]["seq"]
         later = await append(app, inv["id"], 2)
 
         url = f"/api/v1/investigations/{inv['id']}/events"
@@ -89,13 +95,16 @@ async def test_replay_from_last_event_id_then_live_without_duplicates(make_app) 
 async def test_no_last_event_id_replays_everything_and_concurrent_writes_have_no_gap(
     make_app,
 ) -> None:
-    app = make_app(FakeContextService())
+    app = make_app(FakeContextService(), **QUIET)
     async with served(app) as base, httpx.AsyncClient(base_url=base, timeout=10) as client:
         inv = (await client.post("/api/v1/investigations", json={"scenario_id": SCENARIO})).json()
+        start = len(
+            (await client.get(f"/api/v1/investigations/{inv['id']}/timeline")).json()["items"]
+        )
         await append(app, inv["id"], 5)
         writer = asyncio.create_task(append(app, inv["id"], 20))  # races with connect/replay
         async with client.stream("GET", f"/api/v1/investigations/{inv['id']}/events") as resp:
-            got = await collect(sse_events(resp), 26)
+            got = await collect(sse_events(resp), start + 25)
         await writer
         seqs = [int(e["id"]) for e in got]
         assert seqs == sorted(set(seqs))  # strictly increasing: no duplicate
@@ -145,16 +154,19 @@ async def test_unknown_investigation_and_bad_last_event_id(make_app) -> None:
 
 
 async def test_shutdown_closes_open_streams(make_app) -> None:
-    app = make_app(FakeContextService())
+    app = make_app(FakeContextService(), **QUIET)
     rt = runtime(app)
     async with httpx.AsyncClient(timeout=10) as client, served(app) as base:
         inv = (
             await client.post(f"{base}/api/v1/investigations", json={"scenario_id": SCENARIO})
         ).json()
+        start = len(
+            (await client.get(f"{base}/api/v1/investigations/{inv['id']}/timeline")).json()["items"]
+        )
         stream_cm = client.stream("GET", f"{base}/api/v1/investigations/{inv['id']}/events")
         resp = await stream_cm.__aenter__()
         events = sse_events(resp)
-        await collect(events, 1)
+        await collect(events, start)
         rt.broker.close()  # what the lifespan does on SIGTERM
         remaining = [e async for e in events if "comment" not in e]
         assert remaining == []  # stream ended cleanly
@@ -162,14 +174,34 @@ async def test_shutdown_closes_open_streams(make_app) -> None:
 
 
 async def test_graceful_shutdown_changes_no_state(make_app) -> None:
+    """A RUNNING investigation with a DISPATCHED task survives a shutdown untouched (ADR-005 D5):
+    the agent (held at SUBMITTED, same double across both processes) still has the task, so the
+    restarted driver polls, sees no change and writes nothing."""
     fake = FakeContextService()
-    app = make_app(fake)
+    agent = FakeAgent()
+    agent.hold = True
+    app = make_app(fake, agent)
     async with served(app) as base, httpx.AsyncClient(base_url=base, timeout=10) as client:
         inv = (await client.post("/api/v1/investigations", json={"scenario_id": SCENARIO})).json()
-        before = (await client.get(f"/api/v1/investigations/{inv['id']}")).json()
-    app2 = make_app(fake)
+        url = f"/api/v1/investigations/{inv['id']}"
+
+        async def dispatched() -> bool:
+            return (await client.get(url)).json()["tasks"][0]["status"] == "DISPATCHED"
+
+        await wait_until(dispatched)
+        before = (await client.get(url)).json()
+        before_tl = (await client.get(f"{url}/timeline")).json()["items"]
+    assert before["status"] == "RUNNING"
+    app2 = make_app(fake, agent)
+    polls = len(agent.polls)
     async with served(app2) as base, httpx.AsyncClient(base_url=base, timeout=10) as client:
-        after = (await client.get(f"/api/v1/investigations/{inv['id']}")).json()
-        timeline = (await client.get(f"/api/v1/investigations/{inv['id']}/timeline")).json()
+
+        async def polled_again() -> bool:
+            return len(agent.polls) > polls + 2
+
+        await wait_until(polled_again)
+        after = (await client.get(url)).json()
+        timeline = (await client.get(f"{url}/timeline")).json()["items"]
     assert after == before
-    assert len(timeline["items"]) == 1
+    assert timeline == before_tl
+    assert agent.statuses() == [202]  # DISPATCHED is never re-POSTed

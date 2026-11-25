@@ -362,6 +362,14 @@
           "title": "Expected Findings",
           "type": "array"
         },
+        "forbidden_output_strings": {
+          "description": "AC17 tripwire: strings an injected instruction tries to make the agent emit. No produced statement/reasoning_summary may contain one. Distinct from canary_strings, which detect data leaks into telemetry.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden Output Strings",
+          "type": "array"
+        },
         "hidden_paths": {
           "items": {
             "$ref": "#/$defs/HiddenPath"

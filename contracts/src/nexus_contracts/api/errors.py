@@ -39,6 +39,10 @@ class ErrorCode(StrEnum):
     # Added in spec v1.3
     REPLAY_MISS = "replay_miss"
     ANALYSIS_POLICY_UNMET = "analysis_policy_unmet"
+    # Added in S2 (specs/02-features/S2-sigint-agent.md §8.1)
+    AGENT_NOT_ENABLED = "agent_not_enabled"
+    CONTEXT_UNAVAILABLE = "context_unavailable"
+    SUBMISSION_REJECTED = "submission_rejected"
 
 
 class ErrorCategory(StrEnum):
@@ -70,5 +74,8 @@ CATEGORY_BY_CODE: dict[ErrorCode, ErrorCategory] = {
     ErrorCode.CONTENT_CONFLICT: ErrorCategory.CONFLICT,
     ErrorCode.REPLAY_MISS: ErrorCategory.LLM,
     ErrorCode.ANALYSIS_POLICY_UNMET: ErrorCategory.POLICY,
+    ErrorCode.AGENT_NOT_ENABLED: ErrorCategory.POLICY,
+    ErrorCode.CONTEXT_UNAVAILABLE: ErrorCategory.LIFECYCLE,
+    ErrorCode.SUBMISSION_REJECTED: ErrorCategory.VALIDATION,
 }
 """Every code has exactly one category (tested exhaustively)."""
