@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "Nexus Context Service: the only gateway to the shared Relate graph."
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.165.0",
     "nexus-contracts",
     "nexus-shared",
+    "relate-db==1.2.0",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [tool.uv.sources]

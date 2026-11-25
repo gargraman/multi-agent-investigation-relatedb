@@ -32,6 +32,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 
+from nexus_contracts.api.errors import ErrorCode
+from nexus_contracts.api.problem import ProblemDetails
 from nexus_contracts.common import (
     AgentId,
     Attempt,
@@ -214,4 +216,14 @@ class FindingBatchResponse(ValueModel):
     ``ProblemDetails`` carrying the committed ``finding_ids`` as an extension member."""
 
     task_id: TaskId
+    finding_ids: list[FindingId] = Field(min_length=1)
+
+
+class AlreadyCommittedProblem(ProblemDetails):
+    """``409`` body when a batch for this ``task_id`` was already committed with a **different**
+    content hash (§8.5, S2 spec G4). ``finding_ids`` are the committed ids, so the agent can
+    report them and finish ``COMPLETED`` instead of failing."""
+
+    status: Literal[409] = 409
+    code: Literal[ErrorCode.ALREADY_COMMITTED] = ErrorCode.ALREADY_COMMITTED
     finding_ids: list[FindingId] = Field(min_length=1)

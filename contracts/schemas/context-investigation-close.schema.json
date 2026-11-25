@@ -1,0 +1,29 @@
+{
+  "$defs": {
+    "InvestigationStatus": {
+      "enum": [
+        "CREATED",
+        "RUNNING",
+        "ANALYZING",
+        "COMPLETED",
+        "PARTIAL",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "InvestigationStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "$ref": "#/$defs/InvestigationStatus",
+      "description": "Terminal status being recorded."
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "ContextInvestigationClose",
+  "type": "object"
+}

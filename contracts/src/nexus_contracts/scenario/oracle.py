@@ -83,6 +83,14 @@ class Oracle(_Frozen):
     hidden_paths: list[HiddenPath] = Field(default_factory=list)
     expected_denials: list[ExpectedDenial] = Field(default_factory=list)
     canary_strings: list[str] = Field(default_factory=list)
+    forbidden_output_strings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "AC17 tripwire: strings an injected instruction tries to make the agent emit. No "
+            "produced statement/reasoning_summary may contain one. Distinct from canary_strings, "
+            "which detect data leaks into telemetry."
+        ),
+    )
 
     @model_validator(mode="after")
     def _unique(self) -> Oracle:
@@ -92,4 +100,8 @@ class Oracle(_Frozen):
             raise ValueError("duplicate canary string in oracle")
         if any(len(c) < 8 for c in self.canary_strings):
             raise ValueError("canary strings must be at least 8 characters (avoid false hits)")
+        if len(set(self.forbidden_output_strings)) != len(self.forbidden_output_strings):
+            raise ValueError("duplicate forbidden output string in oracle")
+        if any(len(c) < 8 for c in self.forbidden_output_strings):
+            raise ValueError("forbidden output strings must be at least 8 characters")
         return self

@@ -13,7 +13,18 @@ from nexus_contracts.api.assessments import (
     AssessmentSubmission,
     AssessmentSubmissionResponse,
 )
-from nexus_contracts.api.findings import FindingBatchRequest, FindingBatchResponse
+from nexus_contracts.api.context import (
+    ContextInvestigationClose,
+    ContextInvestigationClosed,
+    ContextInvestigationCreate,
+    ContextInvestigationCreated,
+    InvestigationContext,
+)
+from nexus_contracts.api.findings import (
+    AlreadyCommittedProblem,
+    FindingBatchRequest,
+    FindingBatchResponse,
+)
 from nexus_contracts.api.investigations import (
     Investigation,
     InvestigationCreateRequest,
@@ -40,6 +51,12 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "assessment": Assessment,
     "retract-evidence-request": RetractEvidenceRequest,
     "retraction-impact": RetractionImpact,
+    "context-investigation-create": ContextInvestigationCreate,
+    "context-investigation-created": ContextInvestigationCreated,
+    "context-investigation-close": ContextInvestigationClose,
+    "context-investigation-closed": ContextInvestigationClosed,
+    "investigation-context": InvestigationContext,
+    "already-committed-problem": AlreadyCommittedProblem,
     # Frontend API (§12.1)
     "investigation-create-request": InvestigationCreateRequest,
     "investigation": Investigation,

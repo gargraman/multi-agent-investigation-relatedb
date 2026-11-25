@@ -11,7 +11,7 @@ agent so it can answer ``REJECTED`` (§8.2, ADR-004 C2), not die as a ``422``.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -81,10 +81,14 @@ class TaskRequest(ValueModel):
 
 
 class TaskSubmitResponse(ValueModel):
-    """``202`` body of ``POST /v1/tasks``: ``{task_id, status}`` (§12.2)."""
+    """Body of ``POST /v1/tasks``: ``{task_id, status}`` (§12.2).
+
+    ``202`` for a new task (``SUBMITTED`` or ``REJECTED``). A duplicate submit of the same
+    ``task_id``/``attempt`` returns ``200`` with the task's **current** status, so a retried
+    dispatch learns the truth instead of a stale ``SUBMITTED`` (S2 spec G2)."""
 
     task_id: TaskId
-    status: Literal[AgentTaskStatus.SUBMITTED, AgentTaskStatus.REJECTED]
+    status: AgentTaskStatus
 
 
 class TaskUsage(ValueModel):

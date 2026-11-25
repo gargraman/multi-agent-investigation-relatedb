@@ -55,7 +55,10 @@
         "replay_objective_locked",
         "content_conflict",
         "replay_miss",
-        "analysis_policy_unmet"
+        "analysis_policy_unmet",
+        "agent_not_enabled",
+        "context_unavailable",
+        "submission_rejected"
       ],
       "title": "ErrorCode",
       "type": "string"

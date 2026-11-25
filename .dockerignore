@@ -1,0 +1,19 @@
+# Keep build context small and free of secrets / runtime state.
+.git
+.env
+.env.*
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/node_modules
+**/dist
+spikes
+specs
+docs
+backups
+data
+graphify-out
+.codegraph
+apps/frontend
+.claude

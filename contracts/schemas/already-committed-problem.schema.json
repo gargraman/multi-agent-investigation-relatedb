@@ -1,0 +1,126 @@
+{
+  "$defs": {
+    "FieldError": {
+      "additionalProperties": true,
+      "description": "One validation failure, located by a JSON-pointer-like path.",
+      "properties": {
+        "loc": {
+          "description": "Path to the offending value, e.g. ['body', 'objective'].",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "title": "Loc",
+          "type": "array"
+        },
+        "msg": {
+          "description": "Human-readable reason.",
+          "title": "Msg",
+          "type": "string"
+        },
+        "type": {
+          "description": "Machine-readable error type, e.g. 'missing'.",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loc",
+        "msg",
+        "type"
+      ],
+      "title": "FieldError",
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "``409`` body when a batch for this ``task_id`` was already committed with a **different**\ncontent hash (\u00a78.5, S2 spec G4). ``finding_ids`` are the committed ids, so the agent can\nreport them and finish ``COMPLETED`` instead of failing.",
+  "properties": {
+    "code": {
+      "const": "already_committed",
+      "default": "already_committed",
+      "title": "Code",
+      "type": "string"
+    },
+    "detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Human-readable explanation specific to this occurrence.",
+      "title": "Detail"
+    },
+    "errors": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/FieldError"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Nexus extension: per-field validation failures (422 responses).",
+      "title": "Errors"
+    },
+    "finding_ids": {
+      "items": {
+        "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Finding Ids",
+      "type": "array"
+    },
+    "instance": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "URI reference identifying this specific occurrence.",
+      "title": "Instance"
+    },
+    "status": {
+      "const": 409,
+      "default": 409,
+      "title": "Status",
+      "type": "integer"
+    },
+    "title": {
+      "description": "Short, human-readable summary of the problem type.",
+      "title": "Title",
+      "type": "string"
+    },
+    "type": {
+      "default": "about:blank",
+      "description": "URI reference identifying the problem type.",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "finding_ids"
+  ],
+  "title": "AlreadyCommittedProblem",
+  "type": "object"
+}

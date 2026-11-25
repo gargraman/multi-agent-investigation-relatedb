@@ -4,7 +4,22 @@ version = "0.1.0"
 description = "Cross-cutting libraries shared by Nexus services (config, logging, telemetry, security, llm)."
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "nexus-contracts",
+    "opentelemetry-api>=1.45.2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.45.2",
+    "opentelemetry-instrumentation-fastapi>=0.66b2",
+    "opentelemetry-instrumentation-httpx>=0.66b2",
+    "opentelemetry-sdk>=1.45.2",
+    "pydantic-settings>=2.16.3",
+]
+
+[project.optional-dependencies]
+# LLM providers (spec §13.2, S2 G12). Only agent nodes install this extra, so the orchestrator and
+# Context Service images never ship the OpenAI SDK (S2 NFR-006).
+llm = [
+    "certifi>=2024.2.2",
+    "openai>=3.59,<4",
 ]
 
 [tool.uv.sources]

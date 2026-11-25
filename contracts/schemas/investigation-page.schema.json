@@ -42,7 +42,10 @@
         "replay_objective_locked",
         "content_conflict",
         "replay_miss",
-        "analysis_policy_unmet"
+        "analysis_policy_unmet",
+        "agent_not_enabled",
+        "context_unavailable",
+        "submission_rejected"
       ],
       "title": "ErrorCode",
       "type": "string"
@@ -154,6 +157,15 @@
       "title": "InvestigationStatus",
       "type": "string"
     },
+    "LlmMode": {
+      "description": "LLM provider mode (spec \u00a713.2/\u00a713.3, ADR-006 E3). Wire values are lower-case.",
+      "enum": [
+        "live",
+        "replay"
+      ],
+      "title": "LlmMode",
+      "type": "string"
+    },
     "OrchestratorTaskState": {
       "description": "What the orchestrator knows about a task (\u00a78.2), including ``PENDING``/``TIMED_OUT``.",
       "enum": [
@@ -208,7 +220,6 @@
           "$ref": "#/$defs/AgentId"
         },
         "attempt": {
-          "maximum": 2,
           "minimum": 1,
           "title": "Attempt",
           "type": "integer"
@@ -257,6 +268,18 @@
           "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",
           "title": "Id",
           "type": "string"
+        },
+        "llm_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LlmMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mode the agent reported for this attempt (ADR-006 E8)."
         },
         "status": {
           "$ref": "#/$defs/OrchestratorTaskState"

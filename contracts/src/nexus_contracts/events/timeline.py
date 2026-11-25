@@ -20,6 +20,7 @@ from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.states import InvestigationStatus, OrchestratorTaskState
 from nexus_contracts.common import (
     AgentId,
+    Attempt,
     InvestigationId,
     TaskId,
     UtcDatetime,
@@ -39,12 +40,16 @@ class InvestigationStatusChanged(ValueModel):
     from_status: InvestigationStatus | None = None
     to_status: InvestigationStatus
     reason: ErrorCode | None = None
+    skipped_agents: list[AgentId] = Field(
+        default_factory=list,
+        description="Template agents not enabled in this deployment; no task rows (S2 spec G1).",
+    )
 
 
 class TaskStatusChanged(ValueModel):
     task_id: TaskId
     agent_id: AgentId
-    attempt: int = Field(ge=1, le=2)
+    attempt: Attempt
     from_state: OrchestratorTaskState | None = None
     to_state: OrchestratorTaskState
     reason: ErrorCode | None = None
@@ -52,7 +57,7 @@ class TaskStatusChanged(ValueModel):
 
 class TaskLateResult(ValueModel):
     task_id: TaskId
-    attempt: int = Field(ge=1, le=2)
+    attempt: Attempt
     agent_status: AgentTaskStatus
     recorded_state: OrchestratorTaskState
 

@@ -4,8 +4,13 @@ version = "0.1.0"
 description = "Nexus orchestrator: frontend API and deterministic investigation workflow."
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.165.0",
     "nexus-contracts",
     "nexus-shared",
+    "pyyaml>=6.0.4",
+    "sse-starlette>=3.7.1",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [tool.uv.sources]
