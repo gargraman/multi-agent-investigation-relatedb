@@ -1,0 +1,35 @@
+{
+  "$defs": {
+    "AgentTaskStatus": {
+      "description": "Agent task status on the wire, per attempt. Names match A2A v1.0.0 ``TaskState``\n(\u00a78.2, ADR-004 C2). Note the A2A spelling ``CANCELED``.",
+      "enum": [
+        "SUBMITTED",
+        "WORKING",
+        "COMPLETED",
+        "FAILED",
+        "CANCELED",
+        "REJECTED"
+      ],
+      "title": "AgentTaskStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Body of ``POST /v1/tasks/{id}/cancel``: the task's status after the cancel (S3a).",
+  "properties": {
+    "status": {
+      "$ref": "#/$defs/AgentTaskStatus"
+    },
+    "task_id": {
+      "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "status"
+  ],
+  "title": "TaskCancelResponse",
+  "type": "object"
+}

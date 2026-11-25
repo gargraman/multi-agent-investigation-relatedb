@@ -7,7 +7,13 @@ Add a model here when it becomes part of a public contract.
 
 from pydantic import BaseModel
 
-from nexus_contracts.a2a.task import AgentCard, TaskRequest, TaskResult, TaskSubmitResponse
+from nexus_contracts.a2a.task import (
+    AgentCard,
+    TaskCancelResponse,
+    TaskRequest,
+    TaskResult,
+    TaskSubmitResponse,
+)
 from nexus_contracts.api.assessments import (
     Assessment,
     AssessmentSubmission,
@@ -27,6 +33,7 @@ from nexus_contracts.api.findings import (
 )
 from nexus_contracts.api.investigations import (
     Investigation,
+    InvestigationCancelResponse,
     InvestigationCreateRequest,
     InvestigationPage,
 )
@@ -42,6 +49,7 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent-card": AgentCard,
     "task-request": TaskRequest,
     "task-submit-response": TaskSubmitResponse,
+    "task-cancel-response": TaskCancelResponse,
     "task-result": TaskResult,
     # Context Service API (§12.3)
     "finding-batch-request": FindingBatchRequest,
@@ -61,6 +69,7 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "investigation-create-request": InvestigationCreateRequest,
     "investigation": Investigation,
     "investigation-page": InvestigationPage,
+    "investigation-cancel-response": InvestigationCancelResponse,
     "timeline-event": TimelineEvent,
     "timeline-page": TimelinePage,
     # Scenario pack (§11.3)

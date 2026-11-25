@@ -1,0 +1,41 @@
+{
+  "$defs": {
+    "InvestigationStatus": {
+      "enum": [
+        "CREATED",
+        "RUNNING",
+        "ANALYZING",
+        "COMPLETED",
+        "PARTIAL",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "InvestigationStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``POST /api/v1/investigations/{id}/cancel`` (S3a).",
+  "properties": {
+    "context_closed": {
+      "description": "Whether the Context Service investigation was closed by this cancel.",
+      "title": "Context Closed",
+      "type": "boolean"
+    },
+    "id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/InvestigationStatus"
+    }
+  },
+  "required": [
+    "id",
+    "status",
+    "context_closed"
+  ],
+  "title": "InvestigationCancelResponse",
+  "type": "object"
+}

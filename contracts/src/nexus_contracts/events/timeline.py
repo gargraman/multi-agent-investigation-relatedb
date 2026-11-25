@@ -53,6 +53,7 @@ class TaskStatusChanged(ValueModel):
     from_state: OrchestratorTaskState | None = None
     to_state: OrchestratorTaskState
     reason: ErrorCode | None = None
+    deadline: UtcDatetime | None = None
 
 
 class TaskLateResult(ValueModel):

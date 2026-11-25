@@ -39,7 +39,10 @@ export type ErrorCode =
   | "analysis_policy_unmet"
   | "agent_not_enabled"
   | "context_unavailable"
-  | "submission_rejected";
+  | "submission_rejected"
+  | "internal_error"
+  | "investigation_terminal"
+  | "forbidden";
 /**
  * Stable agent identifiers (spec §12.2 example: ``sigint-agent``).
  *

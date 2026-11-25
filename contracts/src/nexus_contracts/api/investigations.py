@@ -75,3 +75,13 @@ class Investigation(ValueModel):
 class InvestigationPage(ValueModel):
     items: list[Investigation]
     next_cursor: str | None = None
+
+
+class InvestigationCancelResponse(ValueModel):
+    """``POST /api/v1/investigations/{id}/cancel`` (S3a)."""
+
+    id: InvestigationId
+    status: InvestigationStatus
+    context_closed: bool = Field(
+        description="Whether the Context Service investigation was closed by this cancel."
+    )

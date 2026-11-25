@@ -5,7 +5,7 @@
 
 export const AgentIdValues = ["sigint-agent","geoint-agent","analysis-agent"] as const;
 export const ErrorCategoryValues = ["llm","evidence","budget","deadline","lifecycle","policy","conflict","validation"] as const;
-export const ErrorCodeValues = ["schema_invalid","llm_unavailable","evidence_integrity_error","budget_exceeded","deadline_exceeded","agent_restarted","unknown_finding_reference","task_lost","task_rejected","investigation_deadline","stale_attempt","already_committed","investigation_cancelled","replay_objective_locked","content_conflict","replay_miss","analysis_policy_unmet","agent_not_enabled","context_unavailable","submission_rejected"] as const;
+export const ErrorCodeValues = ["schema_invalid","llm_unavailable","evidence_integrity_error","budget_exceeded","deadline_exceeded","agent_restarted","unknown_finding_reference","task_lost","task_rejected","investigation_deadline","stale_attempt","already_committed","investigation_cancelled","replay_objective_locked","content_conflict","replay_miss","analysis_policy_unmet","agent_not_enabled","context_unavailable","submission_rejected","internal_error","investigation_terminal","forbidden"] as const;
 export const InvestigationStatusValues = ["CREATED","RUNNING","ANALYZING","COMPLETED","PARTIAL","FAILED","CANCELLED"] as const;
 export const LlmModeValues = ["live","replay"] as const;
 export const OrchestratorTaskStateValues = ["PENDING","DISPATCHED","RUNNING","COMPLETED","FAILED","TIMED_OUT","CANCELLED"] as const;

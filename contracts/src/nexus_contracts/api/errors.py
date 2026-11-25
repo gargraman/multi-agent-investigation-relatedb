@@ -43,6 +43,10 @@ class ErrorCode(StrEnum):
     AGENT_NOT_ENABLED = "agent_not_enabled"
     CONTEXT_UNAVAILABLE = "context_unavailable"
     SUBMISSION_REJECTED = "submission_rejected"
+    # Added in S3a (WP-A1)
+    INTERNAL_ERROR = "internal_error"
+    INVESTIGATION_TERMINAL = "investigation_terminal"
+    FORBIDDEN = "forbidden"
 
 
 class ErrorCategory(StrEnum):
@@ -77,5 +81,9 @@ CATEGORY_BY_CODE: dict[ErrorCode, ErrorCategory] = {
     ErrorCode.AGENT_NOT_ENABLED: ErrorCategory.POLICY,
     ErrorCode.CONTEXT_UNAVAILABLE: ErrorCategory.LIFECYCLE,
     ErrorCode.SUBMISSION_REJECTED: ErrorCategory.VALIDATION,
+    ErrorCode.INTERNAL_ERROR: ErrorCategory.LIFECYCLE,
+    ErrorCode.INVESTIGATION_TERMINAL: ErrorCategory.CONFLICT,
+    # No auth category exists; a 403 is an access-policy denial.
+    ErrorCode.FORBIDDEN: ErrorCategory.POLICY,
 }
 """Every code has exactly one category (tested exhaustively)."""

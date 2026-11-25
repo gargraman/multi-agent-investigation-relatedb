@@ -2,7 +2,7 @@
 
 Endpoints: ``GET /.well-known/agent-card.json`` -> ``AgentCard``; ``POST /v1/tasks`` with
 ``TaskRequest`` -> ``202 TaskSubmitResponse``; ``GET /v1/tasks/{id}`` -> ``TaskResult`` (status
-plus result in one body); ``POST /v1/tasks/{id}/cancel`` (the spec defines no response body).
+plus result in one body); ``POST /v1/tasks/{id}/cancel`` -> ``TaskCancelResponse`` (added in S3a).
 
 ``task_type`` is deliberately a free string, not an enum: an unknown task type must reach the
 agent so it can answer ``REJECTED`` (§8.2, ADR-004 C2), not die as a ``422``.
@@ -86,6 +86,13 @@ class TaskSubmitResponse(ValueModel):
     ``202`` for a new task (``SUBMITTED`` or ``REJECTED``). A duplicate submit of the same
     ``task_id``/``attempt`` returns ``200`` with the task's **current** status, so a retried
     dispatch learns the truth instead of a stale ``SUBMITTED`` (S2 spec G2)."""
+
+    task_id: TaskId
+    status: AgentTaskStatus
+
+
+class TaskCancelResponse(ValueModel):
+    """Body of ``POST /v1/tasks/{id}/cancel``: the task's status after the cancel (S3a)."""
 
     task_id: TaskId
     status: AgentTaskStatus
