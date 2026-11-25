@@ -5,9 +5,11 @@
 UV ?= $(shell command -v uv 2>/dev/null || echo $(HOME)/.local/bin/uv)
 
 .DEFAULT_GOAL := help
+COMPOSE = docker compose -f infrastructure/docker/compose.yaml --env-file .env
+
 
 .PHONY: help sync test lint fmt schemas schemas-check \
-        secrets up up-obs demo demo-replay reset backup e2e logs smoke-live
+        secrets up down ready reset spike-linux up-obs demo demo-replay backup e2e logs smoke-live
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -32,28 +34,47 @@ schemas: ## Regenerate contracts/schemas/*.schema.json
 schemas-check: ## Fail if committed schemas drift from the Pydantic models
 	$(UV) run python scripts/gen_schemas.py --check
 
+# --- Compose stack (S1) -----------------------------------------------------------------
+secrets: ## Generate per-service tokens into .env (git-ignored; values never printed)
+	$(UV) run python scripts/gen_secrets.py
+
+.env:
+	@echo "No .env — run: make secrets" >&2; exit 1
+
+up: .env ## Core app, lite profile; waits until every /readyz is green (AC1)
+	$(COMPOSE) up -d --build --wait
+	@$(MAKE) --no-print-directory ready
+
+down: ## Stop the stack (volumes kept)
+	$(COMPOSE) down
+
+ready: ## AC1 check: every core service healthy and /api/v1/system/health = OK
+	@scripts/check_ready.sh
+
+logs: ## Tail all services
+	$(COMPOSE) logs -f --tail=100
+
+reset: ## Stop and WIPE the Relate store + SQLite volumes (asks first)
+	@read -p "Wipe all Nexus volumes (Relate store, SQLite)? [y/N] " ans; [ "$$ans" = "y" ] || { echo aborted; exit 1; }
+	$(COMPOSE) down -v
+
+spike-linux: .env ## ADR-001 R5: Relate spike suite inside the Linux Context Service image
+	scripts/spike_linux.sh
+
 # --- Not implemented yet: each exits non-zero -------------------------------------------
 define not_implemented
 	@echo "make $@: not implemented yet — arrives in slice $(1)" >&2; exit 1
 endef
 
-secrets: ## (S1) generate per-service tokens into .env
-	$(call not_implemented,S1)
-up: ## (S1) core app, lite profile
-	$(call not_implemented,S1)
 up-obs: ## (S6) core + Grafana LGTM
 	$(call not_implemented,S6)
 demo: ## (S6) up-obs + open UI
 	$(call not_implemented,S6)
 demo-replay: ## (S2) restart agents in replay mode
 	$(call not_implemented,S2)
-reset: ## (S1) wipe Relate store + SQLite volumes
-	$(call not_implemented,S1)
-backup: ## (S1) relate clone of the store to ./backups/
+backup: ## (S1, Good-to-have) relate clone of the store to ./backups/
 	$(call not_implemented,S1)
 e2e: ## (S5) Playwright + chaos + telemetry tests
 	$(call not_implemented,S5)
-logs: ## (S1) tail all services
-	$(call not_implemented,S1)
 smoke-live: ## (S2) live-LLM smoke test
 	$(call not_implemented,S2)
