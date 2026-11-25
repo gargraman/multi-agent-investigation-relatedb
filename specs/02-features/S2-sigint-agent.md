@@ -30,7 +30,7 @@ Rule: an item is Must only if AC4, AC5, AC17, the end-to-end demo or an ADR/spec
 | # | Feature | What | Impact | Effort / risk | M/N |
 |---|---|---|---|---|---|
 | 1 | Contract deltas (WP-A1) | New error codes, wider `TaskSubmitResponse`, `AlreadyCommittedProblem`, `InvestigationContext`, `Oracle.forbidden_output_strings`, schema regen | Unblocks every other WP | S / low | Must |
-| 2 | `POST /v1/investigations/{id}/findings:batch` | One lane tx, idempotent per §8.5, validation, audit | AC5, demo | M / med (Cypher on Relate) | Must |
+| 2 | `POST /v1/findings:batch` (main spec §12.3; `investigation_id` is in the body) | One lane tx, idempotent per §8.5, validation, audit | AC5, demo | M / med (Cypher on Relate) | Must |
 | 3 | `GET /v1/investigations/{id}/context` | Read model: findings, assertions, evidence refs | Oracle E2E (AC17) and recording gate | S / low | Must |
 | 4 | SIGINT node A2A surface | `POST/GET /v1/tasks`, card, livez/readyz, dedup on `(task_id, attempt)` | AC4 | M / low | Must |
 | 5 | Agent SQLite task store + restart sweep | `agent_tasks`; WORKING becomes FAILED(`agent_restarted`) on boot | ADR-003 B5, §8.3 | S / low | Must |
@@ -134,7 +134,7 @@ External deps: `openai` Python SDK (version to pin; verify `responses.create` + 
 | FR-020 | `POST /v1/tasks` accepts only the orchestrator token. New `(task_id, attempt)` gives 202 SUBMITTED. Same pair + same `request_hash` gives 200 with the current status. Same pair + different hash gives 409 `content_conflict`. `attempt` lower than the max stored gives 409 `stale_attempt`. | ADR-003 B4, §8.3 |
 | FR-021 | Validation: `task_type` must be in the card's `task_types`, otherwise REJECTED(`task_rejected`). Major `contract_version` must be 1. `classification_ceiling` must be ≥ evidence used. | §12.2 |
 | FR-022 | `GET /v1/tasks/{task_id}` returns the TaskResult for the highest attempt. 404 if unknown. | §12.2, `status_mapping.py` |
-| FR-023 | `GET /.well-known/agent.json` (path: verify vs §12.2) returns AgentCard {id `sigint-agent`, role, task_types, version, clearance DEMO-HIGH, llm_mode}. `GET /readyz` includes `llm_mode`. | ADR-004 C2, ADR-006 E8 |
+| FR-023 | `GET /.well-known/agent-card.json` (main spec §12.2) returns AgentCard {id `sigint-agent`, role, task_types, version, clearance DEMO-HIGH, llm_mode}. `GET /readyz` includes `llm_mode`. | ADR-004 C2, ADR-006 E8 |
 | FR-024 | On boot, rows in SUBMITTED/WORKING become FAILED(`agent_restarted`). | ADR-003 B5 |
 | FR-025 | Pipeline (pure module `nexus_sigint.pipeline.run(request, provider, manifest, evidence)`): load manifest, check all `input_refs` are SIGINT-owned, verify each via `load_evidence` (sha256 + header). A mismatch gives FAILED(`evidence_integrity_error`). | §6.3, §11 |
 | FR-026 | Detector `recurring_contacts`: resolve `from_handle`/`to_handle` by exact or alias match (`manifest.alias_index()`). Keep records where **both** resolve to HANDLE entities and they differ. Group by canonical pair (lower manifest_id is subject). A pair is a candidate when it has ≥ 2 contact records across the task's evidence (G6). | §11.4, ADR-007 |
@@ -150,7 +150,7 @@ External deps: `openai` Python SDK (version to pin; verify `responses.create` + 
 
 | ID | Requirement | Source |
 |---|---|---|
-| FR-040 | `POST /v1/investigations/{id}/findings:batch`, caller `sigint-agent` (and `geoint-agent` for S3). Idempotency key `findings:{task_id}`. Same hash gives 200 + original ids. Different hash gives 409 `already_committed` + committed ids. | §8.5, §12.3, ADR-002 |
+| FR-040 | `POST /v1/findings:batch` (main spec §12.3; `investigation_id` is in the body), caller `sigint-agent` (and `geoint-agent` for S3). Idempotency key `findings:{task_id}`. Same hash gives 200 + original ids. Different hash gives 409 `already_committed` + committed ids. | §8.5, §12.3, ADR-002 |
 | FR-041 | Validation (422 with FieldErrors): every `about` id exists and is a HANDLE (SIGINT). Evidence exists, `sha256` matches, `owner_node_id == caller`, status ACTIVE, evidence classification rank ≤ caller clearance. Finding classification ≥ max evidence classification. Assertion subject/object are HANDLEs in `about`. | §9.5, ADR-007 G6 |
 | FR-042 | Write state CLOSED gives 409 `investigation_cancelled`. The idempotent replay check runs **before** the fence (G15). | ADR-002 A4 |
 | FR-043 | Audit one event per committed batch (target = Submission). Replays write no audit. 403 is audited. | §14, `repository.py` |
@@ -483,9 +483,9 @@ WP-A1 merges first (≈0.5 d). A2, B, C and D then run in parallel. E can start 
 |---|---|---|
 | **WP-A1 Contracts** | `contracts/src/nexus_contracts/{api/errors.py, a2a/task.py, api/findings.py, api/context.py, api/investigations.py, scenario/oracle.py, registry.py}`, `contracts/schemas/` | §8.1 deltas; examples; regen schemas; contract unit tests |
 | **WP-A2 Context Service** | `context-service/src/nexus_context_service/{routes.py, repository.py, queries/findings.py (new), queries/context.py (new), settings.py}`, its tests | FR-040–045; §8.4 Cypher; first verify nested-datetime UNWIND, falling back to per-assertion statements; audit CONCERNS extension |
-| **WP-B SIGINT node** | `nodes/sigint-node/**`, `shared/src/nexus_shared/llm/**`, `shared/pyproject.toml` (`[llm]` extra) | FR-020–033; providers; prompt `nexus_sigint/prompts/sigint-classify@1.0.0.md` via `importlib.resources`; SQLite; CA builder; **verify strict structured output for the chosen model with a smoke call** |
+| **WP-B SIGINT node** | `nodes/sigint-node/**`, `shared/src/nexus_shared/llm/**`, `shared/pyproject.toml` (`[llm]` extra) | FR-020–033, FR-052 (`scripts/verify_openai.py`); providers; prompt `nexus_sigint/prompts/sigint-classify@1.0.0.md` via `importlib.resources`; SQLite; CA builder; **verify strict structured output for the chosen model with a smoke call** |
 | **WP-C Orchestrator** | `apps/orchestrator/src/nexus_orchestrator/{settings.py, workflow/transitions.py (new), workflow/dispatch.py (new), workflow/poller.py (new), workflow/creation.py, delegation/agent_client.py (new), api/routes.py, state/db.py (queries only)}`, its tests | FR-001–010; chain the CREATED resume into dispatch |
-| **WP-D Scenario + tooling** | `data/scenarios/prompt-injection/**`, `scripts/record_replay.py`, `scripts/verify_openai.py`, `scripts/oracle_subset.py` (new), scenario test lists in `contracts/tests/*`, `data/replay/sigint-agent/**` | FR-050–052; tripwire presence test; add the scenario to the `SCENARIOS` lists (contracts tests, orchestrator tests, context-service conftest, frontend e2e: shared touch, coordinate); recordings for 3 scenarios |
+| **WP-D Scenario + tooling** | `data/scenarios/prompt-injection/**`, `scripts/record_replay.py`, `contracts/src/nexus_contracts/scenario/oracle_check.py` (new; per-agent subset checker), scenario test lists in `contracts/tests/*`, `data/replay/sigint-agent/**` | FR-050–052; tripwire presence test; add the scenario to the `SCENARIOS` lists (contracts tests, orchestrator tests, context-service conftest, frontend e2e: shared touch, coordinate); recordings for 3 scenarios |
 | **WP-E Compose/infra** | `infrastructure/docker/compose.yaml`, `Makefile`, `.env.example`, `scripts/check_ready.sh`, `tests/infra/test_compose_isolation.py` (new) | sigint service, networks, `extra_ca` secret, `sigint-state` volume, depends_on context→sigint→orchestrator, env (`SERVICE_TOKEN=${NEXUS_TOKEN_SIGINT_AGENT}`, `NEXUS_AGENT_URLS`, `NEXUS_LLM_MODE`, `OPENAI_API_KEY`, `OPENAI_MODEL_EXTRACT`); targets `demo-replay`, `smoke-live`, `record-replay`, `verify-openai`; AC5 lint; keep MAX_CONCURRENT 20 |
 
 ### 16.3 Ordered checklist
