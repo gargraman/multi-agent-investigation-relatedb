@@ -21,14 +21,23 @@ import json
 
 from pydantic import Field
 
+from nexus_contracts.api.findings import Assertion
 from nexus_contracts.api.states import InvestigationStatus
 from nexus_contracts.common import (
     AgentId,
+    Attempt,
     Classification,
+    Confidence,
+    ConfidenceBand,
     EntityType,
+    FindingId,
+    FindingKind,
+    FindingStatus,
     InvestigationId,
     ManifestId,
+    Sha256Hex,
     ShortText,
+    TaskId,
     UtcDatetime,
     ValueModel,
 )
@@ -139,3 +148,48 @@ class ContextInvestigationClosed(ValueModel):
     investigation_id: InvestigationId
     status: InvestigationStatus
     closed_at: UtcDatetime
+
+
+# --- Read model: GET /v1/investigations/{id}/context (orchestrator only; S2 spec FR-044, G5) ---
+
+
+class ContextEvidenceRef(ValueModel):
+    """Evidence a finding is ``SUPPORTED_BY``: id, hash and the agent's short summary. Never raw
+    content (§9.1)."""
+
+    evidence_id: ManifestId
+    sha256: Sha256Hex
+    summary: str = Field(max_length=500)
+
+
+class ContextFinding(ValueModel):
+    """One committed finding with server-set provenance, as read back from the graph."""
+
+    id: FindingId
+    kind: FindingKind
+    status: FindingStatus
+    statement: ShortText
+    confidence: Confidence
+    confidence_band: ConfidenceBand
+    classification: Classification
+    source_node_id: AgentId
+    task_id: TaskId
+    attempt: Attempt
+    model_id: str = Field(min_length=1, max_length=200)
+    prompt_version: str = Field(min_length=1, max_length=200)
+    valid_from: UtcDatetime
+    valid_until: UtcDatetime
+    about: list[ManifestId] = Field(min_length=1)
+    evidence: list[ContextEvidenceRef] = Field(min_length=1)
+    assertions: list[Assertion] = Field(default_factory=list)
+    created_at: UtcDatetime
+
+
+class InvestigationContext(ValueModel):
+    """Findings committed for one investigation, ordered by ``created_at`` then ``id``. Used by
+    the AC17 E2E and the UI via the orchestrator proxy (the Context Service network is
+    internal). Reading the store directly would break AC5."""
+
+    investigation_id: InvestigationId
+    status: InvestigationStatus
+    findings: list[ContextFinding] = Field(default_factory=list)

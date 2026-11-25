@@ -1,14 +1,24 @@
 {
-  "additionalProperties": false,
-  "description": "``202`` body of ``POST /v1/tasks``: ``{task_id, status}`` (\u00a712.2).",
-  "properties": {
-    "status": {
+  "$defs": {
+    "AgentTaskStatus": {
+      "description": "Agent task status on the wire, per attempt. Names match A2A v1.0.0 ``TaskState``\n(\u00a78.2, ADR-004 C2). Note the A2A spelling ``CANCELED``.",
       "enum": [
         "SUBMITTED",
+        "WORKING",
+        "COMPLETED",
+        "FAILED",
+        "CANCELED",
         "REJECTED"
       ],
-      "title": "Status",
+      "title": "AgentTaskStatus",
       "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Body of ``POST /v1/tasks``: ``{task_id, status}`` (\u00a712.2).\n\n``202`` for a new task (``SUBMITTED`` or ``REJECTED``). A duplicate submit of the same\n``task_id``/``attempt`` returns ``200`` with the task's **current** status, so a retried\ndispatch learns the truth instead of a stale ``SUBMITTED`` (S2 spec G2).",
+  "properties": {
+    "status": {
+      "$ref": "#/$defs/AgentTaskStatus"
     },
     "task_id": {
       "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",

@@ -23,6 +23,7 @@ from nexus_contracts.common import (
     Attempt,
     FindingId,
     InvestigationId,
+    LlmMode,
     ManifestId,
     ShortText,
     TaskId,
@@ -47,6 +48,9 @@ class TaskView(ValueModel):
     deadline: UtcDatetime
     finding_ids: list[FindingId] = Field(default_factory=list)
     usage: TaskUsage | None = None
+    llm_mode: LlmMode | None = Field(
+        default=None, description="Mode the agent reported for this attempt (ADR-006 E8)."
+    )
     error_category: ErrorCategory | None = None
     error_code: ErrorCode | None = None
     created_at: UtcDatetime

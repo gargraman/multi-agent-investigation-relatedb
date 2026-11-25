@@ -41,7 +41,12 @@ async def test_create_returns_201_created_with_timeline_row_and_publishes(make_a
         assert len(timeline.items) == 1
         ev = timeline.items[0]
         assert ev.type == "investigation.status_changed"
-        assert ev.payload == {"from_status": None, "to_status": "CREATED", "reason": None}
+        assert ev.payload == {
+            "from_status": None,
+            "to_status": "CREATED",
+            "reason": None,
+            "skipped_agents": [],
+        }
 
         detail = await client.get(f"/api/v1/investigations/{inv.id}")
         assert Investigation.model_validate(detail.json()) == inv
