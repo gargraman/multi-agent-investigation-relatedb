@@ -207,6 +207,20 @@ async def test_prompt_injection_cannot_change_graph_facts(baseline_copy: Scenari
     # The planted text reaches the model only inside one fence (markers neutralised).
     summary = provider.calls[0]["input_data"]["candidates"][0]["evidence"][0]["summary"]
     assert summary.count(pipeline.FENCE_OPEN) == 1 and summary.count(pipeline.FENCE_CLOSE) == 1
+    # The planted text is never persisted: stored summaries come from structured fields only.
+    stored = [e.summary for f in out.batch.findings for e in f.evidence]
+    assert stored == [e.summary for f in clean.batch.findings for e in f.evidence]
+    assert all("IGNORE" not in s and "TRIPWIRE" not in s for s in stored)
+
+
+async def test_persisted_evidence_summary_is_derived_not_copied() -> None:
+    """S2 §20 N11: fixture ``summary``/``collector`` text is untrusted; only counts, closed-set
+    channels and dates reach the graph."""
+    out = await _run(FakeProvider(valid_output(2)))
+    for f in out.batch.findings:
+        for e in f.evidence:
+            assert e.summary.startswith(f"Synthetic comms log {e.evidence_id}: ")
+            assert "record" in e.summary and "@" not in e.summary
 
 
 async def test_record_then_replay_round_trip(tmp_path: Path) -> None:

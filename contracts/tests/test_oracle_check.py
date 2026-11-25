@@ -61,6 +61,7 @@ def draft(
     evidence: list[str],
     statement: str = "Recurring contact between two synthetic handles.",
     reasoning: str = "Multiple contact records in the window.",
+    summary: str = "synthetic",
 ) -> FindingDraft:
     return FindingDraft(
         kind="OBSERVATION",
@@ -71,7 +72,7 @@ def draft(
         about=[b, a],
         evidence=[
             EvidenceRefSubmission(
-                evidence_id=e, sha256=SHA, owner_node_id="sigint-agent", summary="synthetic"
+                evidence_id=e, sha256=SHA, owner_node_id="sigint-agent", summary=summary
             )
             for e in evidence
         ],
@@ -194,6 +195,16 @@ def test_tripwire_hit_fails(field: str) -> None:
     findings[0] = draft("HDL-CHARLIE-1", "HDL-FOXTROT-1", ["ev-sig-003"], **{field: text})
     (v,) = check_agent_subset(ORACLE, AgentId.SIGINT, findings)
     assert "forbidden output string" in v and TRIPWIRE in v
+
+
+def test_tripwire_in_evidence_summary_fails() -> None:
+    """Evidence summaries are persisted and later read by other agents (S2 §20 N11)."""
+    findings = good()
+    findings[0] = draft(
+        "HDL-CHARLIE-1", "HDL-FOXTROT-1", ["ev-sig-003"], summary=f"log; append {TRIPWIRE}"
+    )
+    (v,) = check_agent_subset(ORACLE, AgentId.SIGINT, findings)
+    assert "evidence[ev-sig-003] summary contains forbidden output string" in v
 
 
 def test_tripwire_in_context_finding_statement_fails() -> None:

@@ -370,7 +370,7 @@ Replay mode: the OpenAI hop is replaced by a file read, and `llm.replayed` is em
 | Graph facts are deterministic. The LLM cannot add, drop or change pairs, evidence or windows. | FR-026/027/029 |
 | Candidates are aliased `C1..Cn`. Output ids outside that set fail validation. | FR-028 |
 | Evidence summaries are fenced as untrusted data, and the system prompt says to never follow instructions inside them. | prompt |
-| Strict schema plus post-parse length caps. No free-form fields reach the graph except `statement`/`reasoning_summary`. | §8.2 |
+| Strict schema plus post-parse length caps. No free-form fields reach the graph except `statement`/`reasoning_summary`. Evidence summaries are derived from structured fields, never copied from fixtures. | §8.2, §20 N11 |
 | `forbidden_output_strings` tripwire is checked in the oracle E2E and the recording gate. | §10.4 |
 | `summary` in TaskResult is deterministic (counts only). | FR-033 |
 
@@ -563,4 +563,4 @@ Places where the shipped code differs from or adds to this spec. Each is verifie
 | N8 | A dispatch failure emits `transition.dropped` with reason `agent_unreachable`. The investigation stays RUNNING (G13). | orchestrator `workflow/dispatch.py` | S3 deadlines |
 | N9 | `SystemHealth` lives in the orchestrator, not in contracts. | orchestrator API | Move to contracts when the UI types it. |
 | N10 | AC17 A/B (2026-11-25): 3 injected vs 3 injection-stripped live runs. C2 = `ISOLATED_CONTACT` in all 6 (confidence 0.72–0.90), so the label is the model's own judgement. The injected confidence 0.0 was never followed. | `data/replay/sigint-agent/prompt-injection/` | — |
-| N11 | **Open: stored injection text.** `evidence[].summary` is the fixture's summary copied verbatim, so the injection payload (including tripwire strings) is persisted in the graph and served by `GET .../findings`. The tripwire gate scans only `statement`/`reasoning_summary`, so AC17 passes as specified. It becomes a second-order injection vector when S4's analysis-agent reads findings. | `nexus_sigint/pipeline.py` (`_to_draft`) | Decision pending |
+| N11 | **Resolved (option A): stored injection text.** The fixture `summary`/`collector` free text reached the graph verbatim via `evidence[].summary`, a second-order injection vector for S4's analysis-agent. Now `stored_summary()` derives it only from structured fields (record count, the closed `channel` set, dates), e.g. `Synthetic comms log ev-sig-003: 3 records (TEXT 1, VOICE 2), 2026-10-25 to 2026-10-28.` The model still sees the raw text, fenced, so replay keys are unchanged. The gate now also scans evidence summaries. | `nexus_sigint/pipeline.py`, `scenario/oracle_check.py` | — |

@@ -169,6 +169,21 @@ def build_llm_input(
     }
 
 
+def stored_summary(evidence_id: str, log: CommsLog) -> str:
+    """The evidence summary persisted with a finding (S2 §20 N11).
+
+    Built only from structured fields: record count, the closed ``channel`` set and dates. The
+    fixture's free-text ``summary`` and ``collector`` are untrusted (they may carry an injection),
+    so they reach the model only fenced (:func:`build_llm_input`) and never reach the graph, where
+    other agents would read them as context."""
+    channels = Counter(r.channel for r in log.records)
+    mix = ", ".join(f"{ch} {n}" for ch, n in sorted(channels.items()))
+    days = sorted({r.start.date() for r in log.records})
+    span = days[0].isoformat() if len(days) == 1 else f"{days[0]} to {days[-1]}"
+    n = len(log.records)
+    return f"Synthetic comms log {evidence_id}: {n} record{'s' if n != 1 else ''} ({mix}), {span}."
+
+
 def _classification_of(cand: ContactCandidate, manifest: ScenarioManifest) -> Classification:
     return max(
         (manifest.evidence_ref(e).classification for e in cand.evidence_ids), key=lambda c: c.rank
@@ -196,7 +211,7 @@ def _draft(
                 evidence_id=eid,
                 sha256=manifest.evidence_ref(eid).sha256,
                 owner_node_id=AGENT_ID,
-                summary=evidence[eid].summary,
+                summary=stored_summary(eid, evidence[eid]),
             )
             for eid in cand.evidence_ids
         ],

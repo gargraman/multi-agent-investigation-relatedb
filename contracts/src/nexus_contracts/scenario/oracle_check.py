@@ -11,9 +11,10 @@ Rules, each reported as a human-readable violation (empty list = pass):
    for the agent: a missing key and an extra key are both violations (exact equality, G8). Two
    produced findings with the same key are also a violation (an extra, by another name).
 2. For every expected key, the produced finding's evidence ids are a superset of the expected ones.
-3. No produced ``statement`` / ``reasoning_summary`` contains any ``forbidden_output_strings``
-   (AC17 tripwire) or ``canary_strings`` (leak canary) entry. Matching is case-insensitive, which
-   is stricter than the spec's "contains" and avoids trivially evaded hits.
+3. No produced ``statement`` / ``reasoning_summary`` / evidence ``summary`` contains any
+   ``forbidden_output_strings`` (AC17 tripwire) or ``canary_strings`` (leak canary) entry.
+   Matching is case-insensitive, which is stricter than the spec's "contains" and avoids
+   trivially evaded hits.
 
 A finding's assertion type is the single type of its assertions, or ``None`` when it has none. A
 finding mixing assertion types matches no oracle entry (the oracle names one type per finding) and
@@ -172,5 +173,9 @@ def check_agent_subset(
         label = f"finding[{i}] {_fmt(finding_key(finding))}"
         texts.append((f"{label} statement", finding.statement))
         texts.append((f"{label} reasoning_summary", getattr(finding, "reasoning_summary", None)))
+        for e in finding.evidence:
+            # Persisted and later read by other agents as context (S2 §20 N11).
+            where = f"{label} evidence[{e.evidence_id}] summary"
+            texts.append((where, getattr(e, "summary", None)))
     violations.extend(find_forbidden(oracle, texts))
     return violations
