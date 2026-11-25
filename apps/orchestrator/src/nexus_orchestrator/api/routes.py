@@ -1,4 +1,9 @@
-"""Frontend API, S1 subset (spec §12.1), plus probes.
+"""Frontend API, S1 + S2 subset (spec §12.1), plus probes.
+
+S2 adds ``GET /api/v1/investigations/{id}/findings`` (FR-009: proxies the Context Service
+``InvestigationContext``; that service sits on an internal network), ``422
+replay_objective_locked`` on create (FR-008) and one SystemHealth component per enabled agent with
+its ``llm_mode`` (FR-010).
 
 Concurrency cap: ``429 Too Many Requests`` (it is a capacity limit, retryable once an
 investigation ends, not a conflict with the resource being created). ``ProblemDetails.code`` is
@@ -16,20 +21,26 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
+from nexus_contracts.api.context import InvestigationContext
+from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.investigations import (
     Investigation,
     InvestigationCreateRequest,
     InvestigationPage,
 )
 from nexus_contracts.api.problem import FieldError, ProblemDetails
-from nexus_contracts.common import InvestigationId
+from nexus_contracts.common import InvestigationId, LlmMode
 from nexus_contracts.events.timeline import TimelineEvent, TimelinePage
 from nexus_orchestrator.api.problems import ProblemError, problem_response, schema_invalid
 from nexus_orchestrator.api.runtime import Runtime, get_runtime
 from nexus_orchestrator.pubsub import CLOSE
 from nexus_orchestrator.scenarios import ScenarioList
 from nexus_orchestrator.state.repository import InvalidCursor
-from nexus_orchestrator.workflow.creation import ConcurrencyLimitReached, ScenarioNotFound
+from nexus_orchestrator.workflow.creation import (
+    ConcurrencyLimitReached,
+    ReplayObjectiveLocked,
+    ScenarioNotFound,
+)
 
 REPLAY_PAGE = 500
 PROBLEM = {"model": ProblemDetails}
@@ -80,6 +91,13 @@ async def create_investigation(body: InvestigationCreateRequest, rt: RuntimeDep)
         raise ProblemError(
             404, f"scenario {exc.args[0]} not found", title="Unknown scenario"
         ) from exc
+    except ReplayObjectiveLocked as exc:
+        raise ProblemError(
+            422,
+            str(exc),
+            code=ErrorCode.REPLAY_OBJECTIVE_LOCKED.value,
+            title="Objective locked in replay mode",
+        ) from exc
     except ConcurrencyLimitReached as exc:
         raise ProblemError(
             429,
@@ -127,6 +145,29 @@ async def get_timeline(
     except InvalidCursor as exc:
         raise _bad_cursor("cursor") from exc
     return TimelinePage(items=items, next_cursor=next_cursor)
+
+
+@api.get(
+    "/investigations/{investigation_id}/findings",
+    response_model=InvestigationContext,
+    responses={404: PROBLEM, 502: PROBLEM, 503: PROBLEM},
+)
+async def get_findings(investigation_id: InvestigationId, rt: RuntimeDep) -> InvestigationContext:
+    """Committed findings, read through the Context Service (S2 FR-009, AC17 E2E)."""
+    await _require_investigation(rt, investigation_id)
+    read = await rt.context.get_context(investigation_id)
+    if read.context is not None:
+        return read.context
+    if read.status == 404:
+        raise ProblemError(
+            404, f"investigation {investigation_id} is not registered with the Context Service yet"
+        )
+    raise ProblemError(
+        read.status,
+        f"Context Service: {read.detail}",
+        code=ErrorCode.CONTEXT_UNAVAILABLE.value,
+        title="Context Service unavailable",
+    )
 
 
 def _sse(event: TimelineEvent) -> ServerSentEvent:
@@ -203,6 +244,7 @@ class ComponentHealth(BaseModel):
     name: str
     status: HealthStatus
     detail: str | None = None
+    llm_mode: LlmMode | None = None  # agents only (ADR-006 E8, S2 FR-010)
 
 
 class SystemHealth(BaseModel):
@@ -212,7 +254,9 @@ class SystemHealth(BaseModel):
 
 @api.get("/system/health", response_model=SystemHealth)
 async def system_health(rt: RuntimeDep) -> SystemHealth:
-    """Orchestrator not ready → ``DOWN``; any dependency down → ``DEGRADED``; else ``OK``."""
+    """Orchestrator not ready → ``DOWN``; any dependency (Context Service, an enabled agent) down
+    → ``DEGRADED``; else ``OK``. Agents are probed via their card, which also refreshes the E4
+    cache; ``llm_mode`` is the last mode the agent reported."""
     orch = ComponentHealth(
         name="orchestrator",
         status=HealthStatus.OK if rt.ready else HealthStatus.DOWN,
@@ -224,13 +268,25 @@ async def system_health(rt: RuntimeDep) -> SystemHealth:
         status=HealthStatus.OK if ok else HealthStatus.DOWN,
         detail=None if ok else detail,
     )
+    agents = []
+    for agent in rt.registry.agents:
+        state = await rt.registry.check(agent)
+        agents.append(
+            ComponentHealth(
+                name=agent.value,
+                status=HealthStatus.OK if state.reachable else HealthStatus.DOWN,
+                detail=None if state.reachable else state.detail,
+                llm_mode=state.llm_mode,
+            )
+        )
+    deps = [ctx, *agents]
     if orch.status is HealthStatus.DOWN:
         overall = HealthStatus.DOWN
-    elif ctx.status is not HealthStatus.OK:
+    elif any(c.status is not HealthStatus.OK for c in deps):
         overall = HealthStatus.DEGRADED
     else:
         overall = HealthStatus.OK
-    return SystemHealth(status=overall, components=[orch, ctx])
+    return SystemHealth(status=overall, components=[orch, *deps])
 
 
 def _not_ready_reason(rt: Runtime) -> str:

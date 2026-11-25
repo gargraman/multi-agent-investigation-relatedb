@@ -18,7 +18,11 @@ import httpx
 from opentelemetry.sdk.trace import TracerProvider
 from pydantic import ValidationError
 
-from nexus_contracts.api.context import ContextInvestigationCreate, ContextInvestigationCreated
+from nexus_contracts.api.context import (
+    ContextInvestigationCreate,
+    ContextInvestigationCreated,
+    InvestigationContext,
+)
 from nexus_shared.telemetry import instrument_client
 
 log = logging.getLogger(__name__)
@@ -40,6 +44,13 @@ class RegistrationResult:
     @property
     def retryable(self) -> bool:
         return self.outcome is RegistrationOutcome.UNAVAILABLE
+
+
+@dataclass(frozen=True)
+class ContextRead:
+    context: InvestigationContext | None
+    status: int  # 200, 404 (unknown there), 502 (bad response), 503 (unreachable / 5xx)
+    detail: str
 
 
 class ContextServiceClient:
@@ -88,6 +99,29 @@ class ContextServiceClient:
             )
         return RegistrationResult(
             RegistrationOutcome.REJECTED, f"HTTP {resp.status_code}", code=code
+        )
+
+    async def get_context(self, investigation_id: str) -> ContextRead:
+        """``GET /v1/investigations/{id}/context`` (S2 FR-044), for the findings proxy (FR-009)."""
+        try:
+            resp = await self._client.get(f"/v1/investigations/{investigation_id}/context")
+        except httpx.HTTPError as exc:
+            return ContextRead(None, 503, type(exc).__name__)
+        if resp.status_code == 200:
+            try:
+                return ContextRead(
+                    InvestigationContext.model_validate_json(resp.content), 200, "ok"
+                )
+            except ValidationError:
+                log.error(
+                    "Context Service returned an invalid InvestigationContext",
+                    extra={"investigation_id": investigation_id},
+                )
+                return ContextRead(None, 502, "malformed Context Service response")
+        if resp.status_code == 404:
+            return ContextRead(None, 404, "not registered with the Context Service")
+        return ContextRead(
+            None, 503 if resp.status_code >= 500 else 502, f"HTTP {resp.status_code}"
         )
 
     async def readyz(self) -> tuple[bool, str]:
