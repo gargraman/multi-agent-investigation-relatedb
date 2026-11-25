@@ -27,7 +27,9 @@ ANALYSIS = "analysis-agent"
 POLICY: dict[str, frozenset[str]] = {
     "investigations.create": frozenset({ORCHESTRATOR}),
     "investigations.close": frozenset({ORCHESTRATOR}),
-    "investigations.context": frozenset({ORCHESTRATOR, ANALYSIS}),
+    # S2 (FR-044): orchestrator only. Analysis joins in S4 together with clearance filtering and
+    # the FILTERED audit event (spec §9.5); serving it unfiltered now would leak DEMO-HIGH.
+    "investigations.context": frozenset({ORCHESTRATOR}),
     "assessments.provenance": frozenset({ORCHESTRATOR}),
     "evidence.retract": frozenset({ORCHESTRATOR}),
     "entities.contradictions": frozenset({ORCHESTRATOR}),

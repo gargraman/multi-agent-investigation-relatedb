@@ -175,12 +175,18 @@ def test_durability_full_is_accepted(tmp_path: Path, monkeypatch) -> None:
     assert make_settings(tmp_path).relate_durability_mode == "full"
 
 
-def test_token_registry_requires_orchestrator_token(monkeypatch) -> None:
-    monkeypatch.delenv("NEXUS_TOKEN_ORCHESTRATOR", raising=False)
+def test_token_registry_required_and_optional_callers() -> None:
+    # Orchestrator and sigint-agent are required (FR-045); geoint-agent is optional until S3.
     with pytest.raises(ValueError):
-        load_token_registry()
-    monkeypatch.setenv("NEXUS_TOKEN_ORCHESTRATOR", "o" * 40)
-    assert set(load_token_registry().tokens) == {"orchestrator"}
+        load_token_registry({"NEXUS_TOKEN_ORCHESTRATOR": "o" * 40})
+    with pytest.raises(ValueError):
+        load_token_registry({"NEXUS_TOKEN_SIGINT_AGENT": "s" * 40})
+    env = {"NEXUS_TOKEN_ORCHESTRATOR": "o" * 40, "NEXUS_TOKEN_SIGINT_AGENT": "s" * 40}
+    assert set(load_token_registry(env).tokens) == {"orchestrator", "sigint-agent"}
+    full = {**env, "NEXUS_TOKEN_GEOINT_AGENT": "g" * 40}
+    assert set(load_token_registry(full).tokens) == {"orchestrator", "sigint-agent", "geoint-agent"}
+    with pytest.raises(ValueError):  # set but too short is still a startup error
+        load_token_registry({**env, "NEXUS_TOKEN_GEOINT_AGENT": "short"})
 
 
 def test_telemetry_env_forced_off() -> None:
