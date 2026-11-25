@@ -1,0 +1,226 @@
+{
+  "$defs": {
+    "AgentId": {
+      "description": "Stable agent identifiers (spec \u00a712.2 example: ``sigint-agent``).",
+      "enum": [
+        "sigint-agent",
+        "geoint-agent",
+        "analysis-agent"
+      ],
+      "title": "AgentId",
+      "type": "string"
+    },
+    "CartesianPoint": {
+      "additionalProperties": false,
+      "description": "Cell centre on the fictional grid (cartesian, not WGS-84; spec \u00a79.3).",
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "CartesianPoint",
+      "type": "object"
+    },
+    "Classification": {
+      "description": "Fictional demo classification levels (spec \u00a79.3).",
+      "enum": [
+        "DEMO-LOW",
+        "DEMO-MID",
+        "DEMO-HIGH"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "EntityRegistration": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "display_name": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "manifest_id": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Manifest Id",
+          "type": "string"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CartesianPoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "$ref": "#/$defs/EntityType"
+        }
+      },
+      "required": [
+        "manifest_id",
+        "type",
+        "display_name"
+      ],
+      "title": "EntityRegistration",
+      "type": "object"
+    },
+    "EntityType": {
+      "description": "Entity types (spec \u00a79.1). ``LOCATION`` entities are fictional grid cells.",
+      "enum": [
+        "PERSON",
+        "HANDLE",
+        "ORG",
+        "ASSET",
+        "LOCATION"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    },
+    "EvidenceRegistration": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "manifest_id": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Manifest Id",
+          "type": "string"
+        },
+        "owner_node": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_id",
+        "owner_node",
+        "sha256",
+        "classification"
+      ],
+      "title": "EvidenceRegistration",
+      "type": "object"
+    },
+    "RelationshipRegistration": {
+      "additionalProperties": false,
+      "description": "Manifest-sourced ``RELATED_TO`` edge; P0 has only ``USED_BY`` (HANDLE \u2192 PERSON).",
+      "properties": {
+        "source": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Target",
+          "type": "string"
+        },
+        "type": {
+          "pattern": "^USED_BY$",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "source",
+        "target"
+      ],
+      "title": "RelationshipRegistration",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "entities": {
+      "items": {
+        "$ref": "#/$defs/EntityRegistration"
+      },
+      "minItems": 1,
+      "title": "Entities",
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRegistration"
+      },
+      "minItems": 1,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "grid_pitch": {
+      "description": "Needed by I4: co-location radius = 1.5 \u00d7 pitch.",
+      "exclusiveMinimum": 0,
+      "title": "Grid Pitch",
+      "type": "number"
+    },
+    "investigation_id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Investigation Id",
+      "type": "string"
+    },
+    "objective": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "relationships": {
+      "items": {
+        "$ref": "#/$defs/RelationshipRegistration"
+      },
+      "title": "Relationships",
+      "type": "array"
+    },
+    "scenario_id": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Scenario Id",
+      "type": "string"
+    },
+    "scenario_version": {
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "title": "Scenario Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "investigation_id",
+    "scenario_id",
+    "scenario_version",
+    "objective",
+    "grid_pitch",
+    "entities",
+    "evidence"
+  ],
+  "title": "ContextInvestigationCreate",
+  "type": "object"
+}

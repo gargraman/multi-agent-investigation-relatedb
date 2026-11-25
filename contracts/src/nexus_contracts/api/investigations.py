@@ -20,6 +20,7 @@ from nexus_contracts.api.states import InvestigationStatus, OrchestratorTaskStat
 from nexus_contracts.common import (
     AgentId,
     AssessmentId,
+    Attempt,
     FindingId,
     InvestigationId,
     ManifestId,
@@ -42,7 +43,7 @@ class TaskView(ValueModel):
     task_type: TaskType
     status: OrchestratorTaskState
     status_reason: ErrorCode | None = None
-    attempt: int = Field(ge=1, le=2)
+    attempt: Attempt
     deadline: UtcDatetime
     finding_ids: list[FindingId] = Field(default_factory=list)
     usage: TaskUsage | None = None

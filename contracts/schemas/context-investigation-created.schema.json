@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "created": {
+      "description": "False when an identical create was replayed.",
+      "title": "Created",
+      "type": "boolean"
+    },
+    "entity_count": {
+      "minimum": 0,
+      "title": "Entity Count",
+      "type": "integer"
+    },
+    "evidence_count": {
+      "minimum": 0,
+      "title": "Evidence Count",
+      "type": "integer"
+    },
+    "investigation_id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Investigation Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "investigation_id",
+    "created",
+    "entity_count",
+    "evidence_count"
+  ],
+  "title": "ContextInvestigationCreated",
+  "type": "object"
+}

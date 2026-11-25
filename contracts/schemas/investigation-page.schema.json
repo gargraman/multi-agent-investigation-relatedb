@@ -208,7 +208,6 @@
           "$ref": "#/$defs/AgentId"
         },
         "attempt": {
-          "maximum": 2,
           "minimum": 1,
           "title": "Attempt",
           "type": "integer"

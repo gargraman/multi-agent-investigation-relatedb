@@ -1,0 +1,40 @@
+{
+  "$defs": {
+    "InvestigationStatus": {
+      "enum": [
+        "CREATED",
+        "RUNNING",
+        "ANALYZING",
+        "COMPLETED",
+        "PARTIAL",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "InvestigationStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "closed_at": {
+      "format": "date-time",
+      "title": "Closed At",
+      "type": "string"
+    },
+    "investigation_id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Investigation Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/InvestigationStatus"
+    }
+  },
+  "required": [
+    "investigation_id",
+    "status",
+    "closed_at"
+  ],
+  "title": "ContextInvestigationClosed",
+  "type": "object"
+}
