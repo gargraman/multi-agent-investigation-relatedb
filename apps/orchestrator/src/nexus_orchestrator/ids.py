@@ -21,6 +21,10 @@ def new_investigation_id() -> str:
     return f"inv_{ulid()}"
 
 
+def new_task_id() -> str:
+    return f"tsk_{ulid()}"
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
 

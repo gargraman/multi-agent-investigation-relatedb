@@ -5,10 +5,12 @@ Run with exactly one worker::
     uvicorn nexus_orchestrator.main:app --workers 1 --port 8000
 
 Lifespan order (ADR-008 F3): open DB + schema → leader lock (wait ≤ 30 s, else startup fails) →
-resume sweep → background retrier → serve. ``/readyz`` turns green only after the sweep.
+first agent-card read (E4 lock, FR-008) → resume sweep (re-register CREATED, restart drivers
+for RUNNING) → background retrier + card refresh → serve. ``/readyz`` turns green only after
+the sweep.
 
-Shutdown (ADR-005 D5): mark not-ready, close SSE streams, cancel background tasks, release the
-leader row, close clients and DB. No investigation or task status is changed.
+Shutdown (ADR-005 D5): mark not-ready, close SSE streams, cancel background tasks and drivers,
+release the leader row, close clients and DB. No investigation or task status is changed.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from nexus_orchestrator import __version__
 from nexus_orchestrator.api.problems import install_problem_handlers
 from nexus_orchestrator.api.routes import api, probes
 from nexus_orchestrator.api.runtime import Runtime
+from nexus_orchestrator.delegation.agent_client import AgentClient
+from nexus_orchestrator.delegation.agent_registry import AgentRegistry
 from nexus_orchestrator.delegation.context_client import ContextServiceClient
 from nexus_orchestrator.pubsub import TimelineBroker
 from nexus_orchestrator.scenarios import ScenarioCatalog
@@ -34,6 +38,8 @@ from nexus_orchestrator.state.db import Database
 from nexus_orchestrator.state.leader import LeaderLock, LeaderTimings
 from nexus_orchestrator.state.repository import Repository
 from nexus_orchestrator.workflow.creation import InvestigationWorkflow
+from nexus_orchestrator.workflow.dispatch import Dispatcher
+from nexus_orchestrator.workflow.poller import Poller
 from nexus_shared.telemetry import instrument_app, setup_telemetry
 
 log = logging.getLogger(__name__)
@@ -43,11 +49,12 @@ def create_app(
     settings: OrchestratorSettings | None = None,
     context_transport: httpx.AsyncBaseTransport | None = None,
     *,
+    agent_transport: httpx.AsyncBaseTransport | None = None,
     tracer_provider: TracerProvider | None = None,
     leader_holder: str | None = None,
 ) -> FastAPI:
-    """Build the app. Tests inject ``context_transport`` (an ``httpx.MockTransport`` test double
-    at the HTTP boundary) and a ``tracer_provider`` with an in-memory exporter."""
+    """Build the app. Tests inject ``context_transport`` / ``agent_transport`` (test doubles at
+    the HTTP boundary) and a ``tracer_provider`` with an in-memory exporter."""
     settings = settings or OrchestratorSettings()  # type: ignore[call-arg]
     provider = tracer_provider or setup_telemetry(settings)
     tracer = provider.get_tracer("nexus_orchestrator", __version__)
@@ -74,16 +81,39 @@ def create_app(
         ),
         holder=leader_holder,
     )
-    workflow = InvestigationWorkflow(settings, db, repo, catalog, context, tracer)
-    runtime = Runtime(settings, db, broker, repo, catalog, context, leader, workflow)
+    agents = AgentClient(
+        {a: settings.agent_url(a) for a in settings.nexus_agent_urls},
+        settings.service_token.get_secret_value(),
+        submit_timeout=settings.dispatch_timeout_seconds,
+        poll_connect_timeout=settings.poll_connect_timeout_seconds,
+        poll_read_timeout=settings.poll_read_timeout_seconds,
+        probe_timeout=settings.health_probe_timeout_seconds,
+        transport=agent_transport,
+        tracer_provider=provider,
+    )
+    registry = AgentRegistry(
+        agents, settings.nexus_enabled_agents, settings.agent_card_refresh_seconds
+    )
+
+    def is_leader() -> bool:
+        return leader.held
+
+    dispatcher = Dispatcher(settings, db, repo, agents, tracer, is_leader)
+    poller = Poller(settings, db, repo, catalog, agents, dispatcher, tracer, is_leader)
+    workflow = InvestigationWorkflow(settings, db, repo, catalog, context, tracer, poller, registry)
+    runtime = Runtime(
+        settings, db, broker, repo, catalog, context, leader, workflow, agents, registry, poller
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             await db.open()
             await leader.acquire()  # raises LeaderLockError after wait_seconds
+            await registry.refresh()  # before the sweep, so E4 applies from the start
             await workflow.resume_sweep()
             workflow.start()
+            registry.start()
             runtime.sweep_done = True
             log.info("orchestrator ready", extra={"holder": leader.holder})
         except BaseException:
@@ -111,11 +141,14 @@ async def _shutdown(rt: Runtime) -> None:
     rt.shutting_down = True
     rt.broker.close()
     await rt.workflow.stop()
+    await rt.registry.stop()
+    await rt.poller.stop()
     try:
         await rt.leader.release()
     except Exception:
         log.exception("failed to release leader lock")
     await rt.context.aclose()
+    await rt.agents.aclose()
     await rt.db.close()
     log.info("orchestrator stopped")
 

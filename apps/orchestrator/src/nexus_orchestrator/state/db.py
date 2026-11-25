@@ -32,7 +32,11 @@ PRAGMAS = (
 _INV_STATUSES = "'CREATED','RUNNING','ANALYZING','COMPLETED','PARTIAL','FAILED','CANCELLED'"
 _TASK_STATUSES = "'PENDING','DISPATCHED','RUNNING','COMPLETED','FAILED','TIMED_OUT','CANCELLED'"
 
-# Exactly the §8.7 columns. Idempotent: safe to run on every start.
+# S2 addition (not in §8.7): the agent-reported ``llm_mode`` behind ``TaskView.llm_mode``
+# (ADR-006 E8). Appended last so an S1 database is migrated with one ALTER TABLE.
+_LLM_MODE_CHECK = " CHECK (llm_mode IS NULL OR llm_mode IN ('live', 'replay'))"
+
+# The §8.7 columns (plus tasks.llm_mode, above). Idempotent: safe to run on every start.
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS investigations (
     id                 TEXT PRIMARY KEY,
@@ -70,7 +74,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     error_code        TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
-    version           INTEGER NOT NULL DEFAULT 1
+    version           INTEGER NOT NULL DEFAULT 1,
+    llm_mode          TEXT{_LLM_MODE_CHECK}
 );
 CREATE INDEX IF NOT EXISTS ix_tasks_investigation ON tasks (investigation_id);
 
@@ -150,7 +155,16 @@ class Database:
         self._write_lock = asyncio.Lock()
         self._writer = await self._connect()
         await self._writer.executescript(SCHEMA)
+        await self._migrate(self._writer)
         self._reader = await self._connect()
+
+    @staticmethod
+    async def _migrate(conn: aiosqlite.Connection) -> None:
+        """Additive, idempotent column migrations for databases created by older builds."""
+        async with conn.execute("PRAGMA table_info(tasks)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "llm_mode" not in columns:
+            await conn.execute(f"ALTER TABLE tasks ADD COLUMN llm_mode TEXT{_LLM_MODE_CHECK}")
 
     async def close(self) -> None:
         for conn in (self._reader, self._writer):

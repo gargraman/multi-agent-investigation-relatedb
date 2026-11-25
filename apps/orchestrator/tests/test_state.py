@@ -53,6 +53,7 @@ SPEC_COLUMNS = {
         "created_at",
         "updated_at",
         "version",
+        "llm_mode",  # S2 addition (TaskView.llm_mode); not in §8.7, appended last
     ],
     "leader": ["id", "holder", "heartbeat_at"],
     "timeline_events": ["seq", "investigation_id", "type", "payload_json", "created_at"],
