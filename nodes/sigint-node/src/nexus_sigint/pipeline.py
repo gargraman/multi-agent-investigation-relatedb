@@ -7,6 +7,8 @@ Graph facts (``about``, assertions, windows, evidence, classification) come only
 detector and the manifest. The LLM supplies ``confidence``, ``statement`` and
 ``reasoning_summary`` per candidate alias ``C1..Cn`` (FR-029, AC17).
 
+The LLM step is the shared :func:`nexus_shared.agent.llm_steps.classify_with_repair`;
+:data:`nexus_sigint.spec.SIGINT` plugs this module into the shared agent runtime.
 ``scripts/record_replay.py`` calls :func:`run` directly with a ``RecordingProvider``.
 """
 
@@ -16,9 +18,8 @@ import json
 import logging
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -36,19 +37,12 @@ from nexus_contracts.common import AgentId, Classification, ConfidenceBand, Find
 from nexus_contracts.scenario.fixtures import CommsLog
 from nexus_contracts.scenario.loader import EvidenceIntegrityError, load_evidence
 from nexus_contracts.scenario.manifest import ScenarioManifest
-from nexus_shared.llm import (
-    BudgetExceededError,
-    LLMOutputInvalidError,
-    LLMProvider,
-    LLMResult,
-    LLMUnavailableError,
-    ReplayKeyContext,
-    ReplayMissError,
-    TokenBudget,
-    render_user_message,
-)
+from nexus_shared.agent.llm_steps import classify_with_repair
+from nexus_shared.agent.prompts import Prompt
+from nexus_shared.agent.spec import PipelineOutcome
+from nexus_shared.llm import LLMProvider, ReplayKeyContext, TokenBudget
 from nexus_sigint.detectors import ContactCandidate, recurring_contacts
-from nexus_sigint.prompts import Prompt, load_prompt
+from nexus_sigint.prompts import load_prompt
 from nexus_sigint.schemas import SCHEMA_VERSION, SigintLlmOutput, check_output
 
 log = logging.getLogger(__name__)
@@ -67,24 +61,17 @@ FENCE_OPEN = "<<<UNTRUSTED_EVIDENCE"
 FENCE_CLOSE = "UNTRUSTED_EVIDENCE>>>"
 
 
-@dataclass(frozen=True)
-class PipelineOutcome:
-    """Result of one pipeline run.
-
-    ``status`` is COMPLETED, FAILED or REJECTED (REJECTED only for requests that fail
-    :func:`validate_request`; the API normally rejects those at submit). ``batch`` is ``None``
-    when there are zero candidates or the run did not complete. ``error`` is a ``TaskError``
-    (``.code`` / ``.category``) on FAILED/REJECTED."""
-
-    status: AgentTaskStatus
-    batch: FindingBatchRequest | None
-    usage: TaskUsage
-    model_id: str | None
-    prompt_version: str
-    error: TaskError | None
-    summary: str
-    warnings: list[str] = field(default_factory=list)
-    candidate_count: int = 0
+__all__ = [
+    "AGENT_ID",
+    "LLM_TASK",
+    "TASK_TYPES",
+    "PipelineOutcome",
+    "band_for",
+    "build_llm_input",
+    "run",
+    "stored_summary",
+    "validate_request",
+]
 
 
 def band_for(confidence: float) -> ConfidenceBand:
@@ -108,15 +95,6 @@ def validate_request(request: TaskRequest, manifest: ScenarioManifest | None) ->
         if ref not in owners or owners[ref].owner_node is not AGENT_ID:
             return ErrorCode.TASK_REJECTED
     return None
-
-
-def _add(a: TaskUsage, b: TaskUsage) -> TaskUsage:
-    return TaskUsage(
-        input_tokens=a.input_tokens + b.input_tokens,
-        output_tokens=a.output_tokens + b.output_tokens,
-        llm_calls=a.llm_calls + b.llm_calls,
-        replayed=a.replayed or b.replayed,
-    )
 
 
 def _fence(evidence_id: str, text: str) -> str:
@@ -322,62 +300,23 @@ async def run(
         schema_version=SCHEMA_VERSION,
     )
 
-    result: LLMResult | None = None
-    errors: list[str] = []
-    for ordinal in (0, 1):  # primary + one repair (FR-028)
-        data = input_data if ordinal == 0 else {**input_data, "repair": {"errors": errors}}
-        estimate = budget.estimate_call(prompt.text, render_user_message(data))
-        try:
-            budget.ensure_can_spend(estimate)
-        except BudgetExceededError:
-            return failed(ErrorCode.BUDGET_EXCEEDED, len(candidates))
-        with tracer.start_as_current_span("gen_ai.generate") as span:
-            span.set_attribute("nexus.call_ordinal", ordinal)
-            try:
-                call = await provider.generate_structured(
-                    task=LLM_TASK,
-                    instructions=prompt.text,
-                    prompt_version=prompt.version,
-                    prompt_sha256=prompt.sha256,
-                    input_data=data,
-                    output_schema=SigintLlmOutput,
-                    budget=budget,
-                    call_ordinal=ordinal,
-                    key_context=key_context,
-                )
-            except LLMOutputInvalidError as exc:
-                usage = _add(usage, exc.usage)
-                model_id = exc.model_id
-                errors = [exc.reason]
-                try:
-                    budget.charge(exc.usage)
-                except BudgetExceededError:
-                    return failed(ErrorCode.BUDGET_EXCEEDED, len(candidates))
-                continue
-            except ReplayMissError as exc:
-                log.error("replay miss", extra={"expected_key": exc.expected_key})
-                return failed(ErrorCode.REPLAY_MISS, len(candidates))
-            except LLMUnavailableError as exc:
-                log.warning("llm unavailable", extra={"reason": str(exc)})
-                return failed(ErrorCode.LLM_UNAVAILABLE, len(candidates))
-            usage = _add(usage, call.usage)
-            model_id = call.model_id
-            span.set_attribute("gen_ai.request.model", call.model_id)
-            span.set_attribute("gen_ai.usage.input_tokens", call.usage.input_tokens)
-            span.set_attribute("gen_ai.usage.output_tokens", call.usage.output_tokens)
-        try:
-            budget.charge(call.usage)
-        except BudgetExceededError:
-            return failed(ErrorCode.BUDGET_EXCEEDED, len(candidates))
-        assert isinstance(call.output, SigintLlmOutput)
-        errors = check_output(call.output, aliases)
-        if not errors:
-            result = call
-            break
-    if result is None:
-        return failed(ErrorCode.SCHEMA_INVALID, len(candidates))
+    result = await classify_with_repair(
+        provider=provider,
+        prompt=prompt,
+        input_data=input_data,
+        output_schema=SigintLlmOutput,
+        check=lambda out: check_output(cast(SigintLlmOutput, out), aliases),
+        budget=budget,
+        key_context=key_context,
+        llm_task=LLM_TASK,
+        tracer=tracer,
+    )
+    usage = result.usage
+    model_id = result.model_id
+    if result.error is not None:
+        return failed(result.error, len(candidates))
 
-    assert isinstance(result.output, SigintLlmOutput)
+    assert isinstance(result.output, SigintLlmOutput) and result.model_id is not None
     by_alias = {c.candidate_id: c for c in result.output.classifications}
     try:
         findings = [

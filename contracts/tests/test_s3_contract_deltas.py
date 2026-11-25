@@ -24,11 +24,8 @@ def test_internal_error_is_lifecycle_and_not_redispatchable() -> None:
 def test_new_codes_have_categories() -> None:
     assert ErrorCode("investigation_terminal") is ErrorCode.INVESTIGATION_TERMINAL
     assert ErrorCode("forbidden") is ErrorCode.FORBIDDEN
-    assert (
-        CATEGORY_BY_CODE[ErrorCode.INVESTIGATION_TERMINAL]
-        is CATEGORY_BY_CODE[ErrorCode.STALE_ATTEMPT]
-    )
-    assert ErrorCode.FORBIDDEN in CATEGORY_BY_CODE
+    assert CATEGORY_BY_CODE[ErrorCode.FORBIDDEN] is ErrorCategory.POLICY
+    assert CATEGORY_BY_CODE[ErrorCode.INVESTIGATION_TERMINAL] is ErrorCategory.CONFLICT
 
 
 def test_cancel_responses_round_trip() -> None:

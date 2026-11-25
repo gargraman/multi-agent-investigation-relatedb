@@ -5,7 +5,8 @@
 - ``GET /v1/tasks/{task_id}``: TaskResult of the highest attempt; 404 if unknown.
 - ``GET /.well-known/agent-card.json``, ``/livez``, ``/readyz``: unauthenticated (G20).
 
-Every error is ``application/problem+json`` (spec §12).
+Every error is ``application/problem+json`` (spec §12). Agent-specific behaviour (identity, task
+types, submit-time policy) comes from the :class:`AgentSpec` on ``app.state.spec``.
 """
 
 from __future__ import annotations
@@ -22,13 +23,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from nexus_contracts.a2a.task import AgentCard, TaskRequest, TaskResult, TaskSubmitResponse
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
-from nexus_contracts.common import AgentId, Classification
+from nexus_contracts.common import Classification
 from nexus_shared.agent.catalog import ManifestCatalog
+from nexus_shared.agent.runner import TaskRunner
+from nexus_shared.agent.settings import AgentSettings
+from nexus_shared.agent.spec import AgentSpec
 from nexus_shared.agent.store import SubmitDecision, TaskStore
 from nexus_shared.security import ORCHESTRATOR, TokenRegistry
-from nexus_sigint import __version__, pipeline
-from nexus_sigint.runner import TaskRunner
-from nexus_sigint.settings import SigintSettings
 
 log = logging.getLogger(__name__)
 
@@ -129,12 +130,12 @@ async def require_orchestrator(request: Request) -> str:
 Caller = Annotated[str, Depends(require_orchestrator)]
 
 
-def agent_card(settings: SigintSettings) -> AgentCard:
+def agent_card(spec: AgentSpec, settings: AgentSettings) -> AgentCard:
     return AgentCard(
-        id=AgentId.SIGINT,
-        role="SIGINT specialist: recurring contact patterns in synthetic communications metadata",
-        task_types=list(pipeline.TASK_TYPES),
-        version=__version__,
+        id=spec.agent_id,
+        role=spec.role,
+        task_types=list(spec.task_types),
+        version=spec.version,
         clearance=Classification.DEMO_HIGH,
         llm_mode=settings.nexus_llm_mode,
     )
@@ -148,12 +149,13 @@ def agent_card(settings: SigintSettings) -> AgentCard:
 )
 async def submit_task(body: TaskRequest, request: Request, _caller: Caller) -> JSONResponse:
     state = request.app.state
-    settings: SigintSettings = state.settings
+    spec: AgentSpec = state.spec
+    settings: AgentSettings = state.settings
     store: TaskStore = state.store
     catalog: ManifestCatalog = state.catalog
     runner: TaskRunner = state.runner
 
-    rejected = pipeline.validate_request(body, catalog.get(body.scenario_id))
+    rejected = spec.validate_request(body, catalog.get(body.scenario_id))
     decision, row = await store.submit(body, llm_mode=settings.nexus_llm_mode, rejected=rejected)
     if decision is SubmitDecision.STALE:
         raise ProblemError(
@@ -192,7 +194,7 @@ async def get_task(task_id: str, request: Request, _caller: Caller) -> TaskResul
 
 @router.get("/.well-known/agent-card.json", response_model=AgentCard)
 async def get_agent_card(request: Request) -> AgentCard:
-    return agent_card(request.app.state.settings)
+    return agent_card(request.app.state.spec, request.app.state.settings)
 
 
 @router.get("/livez", include_in_schema=False)

@@ -5,6 +5,8 @@
 - Dedup on ``(task_id, attempt)`` is decided inside one ``BEGIN IMMEDIATE`` transaction.
 - Every update is compare-and-set on ``version``.
 - Boot sweep (FR-024): SUBMITTED/WORKING become FAILED(``agent_restarted``).
+- One store (one SQLite file) per agent: rows carry no agent column; every row and
+  ``TaskResult`` reports the store's ``agent_id``.
 """
 
 from __future__ import annotations
@@ -131,6 +133,7 @@ class SubmitDecision(StrEnum):
 @dataclass(frozen=True)
 class TaskRow:
     data: dict[str, Any]
+    agent_id: AgentId
 
     def __getitem__(self, key: str) -> Any:
         return self.data[key]
@@ -149,7 +152,7 @@ class TaskRow:
         error = TaskError.for_code(ErrorCode(d["error_code"])) if d["error_code"] else None
         return TaskResult(
             task_id=d["task_id"],
-            agent_id=AgentId.SIGINT,
+            agent_id=self.agent_id,
             status=status,
             attempt=d["attempt"],
             llm_mode=LlmMode(d["llm_mode"]),
@@ -172,8 +175,9 @@ class TaskRow:
 
 
 class TaskStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, agent_id: AgentId) -> None:
         self.path = path
+        self.agent_id = agent_id
         self._conn: aiosqlite.Connection | None = None
         self._lock: asyncio.Lock | None = None
 
@@ -217,11 +221,10 @@ class TaskStore:
                     await self._conn.execute("ROLLBACK")
                 raise
 
-    @staticmethod
-    async def _one(conn: aiosqlite.Connection, sql: str, params: tuple) -> TaskRow | None:
+    async def _one(self, conn: aiosqlite.Connection, sql: str, params: tuple) -> TaskRow | None:
         async with conn.execute(sql, params) as cur:
             row = await cur.fetchone()
-        return TaskRow(dict(row)) if row is not None else None
+        return TaskRow(dict(row), self.agent_id) if row is not None else None
 
     async def get(self, task_id: str, attempt: int) -> TaskRow | None:
         async with self._tx() as conn:

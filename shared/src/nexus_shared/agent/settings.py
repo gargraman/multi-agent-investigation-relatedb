@@ -1,6 +1,7 @@
 """Specialist-agent configuration (spec §13.3, S2 §10.3). Fails fast on bad config at startup.
 
-Each agent subclasses :class:`AgentSettings` and sets ``service_name`` (no default here).
+Each agent subclasses :class:`AgentSettings` and sets ``service_name`` and ``sqlite_path`` (no
+defaults here, so two agents can never share a task database by accident).
 
 Env vars (no prefix): ``SERVICE_TOKEN`` (this agent's own token, sent to the Context Service),
 ``NEXUS_TOKEN_ORCHESTRATOR`` (the only token accepted on ``/v1/tasks``; read by
@@ -35,7 +36,7 @@ ACCEPTED_CALLERS: tuple[str, ...] = (ORCHESTRATOR,)
 
 class AgentSettings(ServiceSettings):
     context_service_url: str = "http://context-service:8000"
-    sqlite_path: Path = Path("var/agent.sqlite")
+    sqlite_path: Path
     scenarios_dir: Path = Path("data/scenarios")
     fixtures_dir: Path = Path("data/fixtures")
 

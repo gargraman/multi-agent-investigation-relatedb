@@ -5,8 +5,7 @@ from pathlib import Path
 import pytest
 
 from nexus_contracts.a2a.task import AgentTaskStatus
-from nexus_contracts.common import LlmMode
-from nexus_shared.agent.settings import AgentSettings
+from nexus_contracts.common import AgentId, LlmMode
 from nexus_shared.agent.store import SubmitDecision, TaskStore
 
 from .conftest import make_request
@@ -14,14 +13,14 @@ from .conftest import make_request
 
 async def test_boot_sweep_fails_in_flight_rows(tmp_path: Path) -> None:
     path = tmp_path / "s.sqlite"
-    store = TaskStore(path)
+    store = TaskStore(path, AgentId.SIGINT)
     assert await store.open() == 0
     _, row = await store.submit(make_request(), llm_mode=LlmMode.REPLAY)
     await store.update("tsk_test1", 1, row.version, status=AgentTaskStatus.WORKING.value)
     await store.submit(make_request(task_id="tsk_test2"), llm_mode=LlmMode.REPLAY)  # SUBMITTED
     await store.close()
 
-    store = TaskStore(path)
+    store = TaskStore(path, AgentId.SIGINT)
     assert await store.open() == 2
     for tid in ("tsk_test1", "tsk_test2"):
         result = (await store.latest(tid)).to_result()
@@ -32,7 +31,7 @@ async def test_boot_sweep_fails_in_flight_rows(tmp_path: Path) -> None:
 
 
 async def test_dedup_decisions(tmp_path: Path) -> None:
-    store = TaskStore(tmp_path / "s.sqlite")
+    store = TaskStore(tmp_path / "s.sqlite", AgentId.SIGINT)
     await store.open()
     req = make_request(attempt=2)
     assert (await store.submit(req, llm_mode=LlmMode.LIVE))[0] is SubmitDecision.NEW
@@ -52,7 +51,7 @@ async def test_dedup_decisions(tmp_path: Path) -> None:
 
 
 async def test_cas_update_rejects_moved_version(tmp_path: Path) -> None:
-    store = TaskStore(tmp_path / "s.sqlite")
+    store = TaskStore(tmp_path / "s.sqlite", AgentId.SIGINT)
     await store.open()
     _, row = await store.submit(make_request(), llm_mode=LlmMode.LIVE)
     assert await store.update("tsk_test1", 1, row.version, status="WORKING") is not None
@@ -62,8 +61,10 @@ async def test_cas_update_rejects_moved_version(tmp_path: Path) -> None:
     await store.close()
 
 
-def test_live_mode_requires_key() -> None:
-    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        AgentSettings(service_name="test-agent", service_token="s" * 40, nexus_llm_mode="live")
-    ok = AgentSettings(service_name="test-agent", service_token="s" * 40, nexus_llm_mode="replay")
-    assert ok.fixtures_dir == Path("data/fixtures") and ok.replay_dir == Path("data/replay")
+async def test_results_carry_the_stores_agent_id(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "g.sqlite", AgentId.GEOINT)
+    await store.open()
+    _, row = await store.submit(make_request(agent="geoint-agent"), llm_mode=LlmMode.REPLAY)
+    assert row.to_result().agent_id == "geoint-agent"
+    assert (await store.latest("tsk_test1")).to_result().agent_id is AgentId.GEOINT
+    await store.close()

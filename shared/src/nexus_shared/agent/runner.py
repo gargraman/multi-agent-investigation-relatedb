@@ -1,7 +1,8 @@
 """Background execution of accepted tasks (spec §8.3, ADR-003).
 
 Each accepted task runs as an asyncio task inside the single worker:
-SUBMITTED → WORKING → pipeline (pure) → one ``findings:batch`` submit → COMPLETED/FAILED.
+SUBMITTED → WORKING → ``spec.run`` (pure pipeline) → one ``findings:batch`` submit →
+COMPLETED/FAILED. Nothing here is agent-specific: the :class:`AgentSpec` supplies the pipeline.
 
 - The agent self-cancels at ``deadline + grace`` (ADR-003 B3) while detecting/calling the LLM,
   never during the commit: a commit that started is not interrupted (§8.3).
@@ -25,9 +26,9 @@ from nexus_contracts.a2a.task import AgentTaskStatus, TaskRequest, TaskUsage
 from nexus_contracts.api.errors import CATEGORY_BY_CODE, ErrorCode
 from nexus_shared.agent.catalog import ManifestCatalog
 from nexus_shared.agent.context_client import ContextServiceClient
+from nexus_shared.agent.spec import AgentSpec
 from nexus_shared.agent.store import TaskRow, TaskStore, utcnow
 from nexus_shared.llm import LLMProvider, TokenBudget
-from nexus_sigint import pipeline
 
 log = logging.getLogger(__name__)
 
@@ -40,11 +41,15 @@ class TaskRunner:
         catalog: ManifestCatalog,
         fixtures_root: Path,
         context: ContextServiceClient,
+        spec: AgentSpec,
         *,
         deadline_grace_s: float = 5.0,
         tracer_provider: TracerProvider | None = None,
     ) -> None:
-        self.tracer = trace.get_tracer("nexus_sigint", tracer_provider=tracer_provider)
+        self.spec = spec
+        self.tracer = trace.get_tracer(
+            f"nexus_{spec.agent_id.value.split('-')[0]}", tracer_provider=tracer_provider
+        )
         self.store = store
         self.provider = provider
         self.catalog = catalog
@@ -109,7 +114,7 @@ class TaskRunner:
             if remaining <= 0:
                 raise TimeoutError
             outcome = await asyncio.wait_for(
-                pipeline.run(
+                self.spec.run(
                     request,
                     provider=self.provider,
                     manifest=manifest,

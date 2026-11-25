@@ -1,4 +1,8 @@
-"""Fixtures for the shared agent-runtime tests. Agent-neutral: no node package is imported."""
+"""Fixtures for the shared agent-runtime tests.
+
+No node package is imported. The agent a request or batch is built for is the ``agent`` parameter
+(any ``AgentId`` value with a task in the scenario template); it defaults to ``sigint-agent`` only
+because that is the agent whose task most store/client tests happen to use."""
 
 from __future__ import annotations
 
@@ -14,9 +18,12 @@ ROOT = Path(__file__).resolve().parents[3]
 SCENARIOS = ROOT / "data/scenarios"
 
 
-def make_request(scenario: str = "baseline-corroboration", **kw: Any) -> TaskRequest:
+def make_request(
+    scenario: str = "baseline-corroboration", agent: str = "sigint-agent", **kw: Any
+) -> TaskRequest:
+    """A valid TaskRequest for ``agent``'s task in ``scenario``'s manifest template."""
     manifest = load_manifest(SCENARIOS / scenario)
-    task = next(t for t in manifest.template.tasks if t.agent.value == "sigint-agent")
+    task = next(t for t in manifest.template.tasks if t.agent.value == agent)
     body: dict[str, Any] = {
         "task_id": "tsk_test1",
         "investigation_id": "inv_test1",
@@ -35,8 +42,9 @@ def make_request(scenario: str = "baseline-corroboration", **kw: Any) -> TaskReq
     return TaskRequest.model_validate(body)
 
 
-def make_batch() -> FindingBatchRequest:
-    """A minimal valid findings batch (the client under test treats the body as opaque)."""
+def make_batch(agent: str = "sigint-agent") -> FindingBatchRequest:
+    """A minimal valid findings batch whose evidence is owned by ``agent`` (the client under test
+    treats the body as opaque)."""
     return FindingBatchRequest.model_validate(
         {
             "task_id": "tsk_test1",
@@ -54,7 +62,7 @@ def make_batch() -> FindingBatchRequest:
                         {
                             "evidence_id": "ev-1",
                             "sha256": "a" * 64,
-                            "owner_node_id": "sigint-agent",
+                            "owner_node_id": agent,
                             "summary": "Contact records.",
                         }
                     ],
