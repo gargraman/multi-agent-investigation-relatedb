@@ -4,7 +4,14 @@ version = "0.1.0"
 description = "Cross-cutting libraries shared by Nexus services (config, logging, telemetry, security, llm)."
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "nexus-contracts",
+    "opentelemetry-api>=1.45.2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.45.2",
+    "opentelemetry-instrumentation-fastapi>=0.66b2",
+    "opentelemetry-instrumentation-httpx>=0.66b2",
+    "opentelemetry-sdk>=1.45.2",
+    "pydantic-settings>=2.16.3",
 ]
 
 [tool.uv.sources]

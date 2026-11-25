@@ -17,7 +17,9 @@ exclude = ["spikes/*", "spikes"]
 [dependency-groups]
 dev = [
     "faker>=30",
+    "fastapi>=0.165.0",
     "pytest",
+    "pytest-asyncio>=1.5.0",
     "ruff",
 ]
 
@@ -60,3 +62,5 @@ testpaths = [
 ]
 # importlib mode: several members have identically named test modules (test_import.py).
 addopts = ["--import-mode=importlib", "-ra", "--strict-markers"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
