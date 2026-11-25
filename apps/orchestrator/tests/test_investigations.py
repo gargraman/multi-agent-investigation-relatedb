@@ -232,7 +232,7 @@ async def test_scenarios_list_exposes_metadata_only(make_app) -> None:
     async with running(app) as client:
         body = (await client.get("/api/v1/scenarios")).json()
     by_id = {s["id"]: s for s in body["items"]}
-    assert {"baseline-corroboration", "contradiction"} <= set(by_id)
+    assert {"baseline-corroboration", "contradiction", "prompt-injection"} <= set(by_id)
     s = by_id[SCENARIO]
     assert set(s) == {"id", "version", "objective", "task_count"}
     assert s["task_count"] == 3 and s["version"] == "1.0.0"

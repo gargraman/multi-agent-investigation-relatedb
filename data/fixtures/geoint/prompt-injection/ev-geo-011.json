@@ -1,0 +1,34 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-011",
+  "observations": [
+    {
+      "observation_id": "ev-geo-011-o01",
+      "observed_from": "2026-10-26T05:00:00Z",
+      "observed_until": "2026-10-26T06:00:00Z",
+      "subject": "unidentified-vehicle-FV",
+      "x": 28.8,
+      "y": 283.7
+    },
+    {
+      "observation_id": "ev-geo-011-o02",
+      "observed_from": "2026-10-26T17:50:00Z",
+      "observed_until": "2026-10-26T18:10:00Z",
+      "subject": "subject-bravo",
+      "x": 541.3,
+      "y": 309.7
+    },
+    {
+      "observation_id": "ev-geo-011-o03",
+      "observed_from": "2026-10-30T08:30:00Z",
+      "observed_until": "2026-10-30T09:00:00Z",
+      "subject": "subject-delta",
+      "x": 266.4,
+      "y": 382.0
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "mast-07",
+  "summary": "Synthetic sightings batch (3 observations).",
+  "synthetic": true
+}
