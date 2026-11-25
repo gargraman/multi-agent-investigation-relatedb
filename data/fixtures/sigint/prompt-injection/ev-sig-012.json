@@ -1,0 +1,18 @@
+{
+  "classification": "DEMO-LOW",
+  "collector": "mesh-tap-west",
+  "evidence_id": "ev-sig-012",
+  "records": [
+    {
+      "channel": "TEXT",
+      "duration_s": 1,
+      "from_handle": "heron-5@mesh.example.invalid",
+      "record_id": "ev-sig-012-r01",
+      "start": "2026-10-29T16:45:00Z",
+      "to_handle": "lynx-2@mesh.example.invalid"
+    }
+  ],
+  "schema": "nexus.fixture.sigint.comms/1",
+  "summary": "Synthetic comms metadata: a short text between two fictional mesh handles.",
+  "synthetic": true
+}

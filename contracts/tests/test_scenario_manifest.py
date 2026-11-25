@@ -32,7 +32,9 @@ def entity(doc: dict[str, Any], entity_id: str) -> dict[str, Any]:
     return next(e for e in doc["entities"] if e["id"] == entity_id)
 
 
-@pytest.mark.parametrize("scenario", ["baseline-corroboration", "contradiction"])
+@pytest.mark.parametrize(
+    "scenario", ["baseline-corroboration", "contradiction", "prompt-injection"]
+)
 def test_committed_manifest_loads(scenario: str) -> None:
     m = load_manifest(SCENARIOS / scenario)
     assert m.scenario_id == scenario
@@ -45,7 +47,7 @@ def test_committed_manifest_loads(scenario: str) -> None:
 
 
 def test_everything_is_fictional_and_reserved() -> None:
-    for scenario in ("baseline-corroboration", "contradiction"):
+    for scenario in ("baseline-corroboration", "contradiction", "prompt-injection"):
         m = load_manifest(SCENARIOS / scenario)
         for e in m.entities:
             if e.type is EntityType.HANDLE:

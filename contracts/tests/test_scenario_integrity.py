@@ -22,7 +22,7 @@ from nexus_contracts.scenario import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA = REPO_ROOT / "data"
-SCENARIOS = ["baseline-corroboration", "contradiction"]
+SCENARIOS = ["baseline-corroboration", "contradiction", "prompt-injection"]
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
