@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "Success body: committed finding ids, in submission order (\u00a78.5). A replay with the same\nhash returns the original ids; a different hash gets ``409 already_committed`` as\n``ProblemDetails`` carrying the committed ``finding_ids`` as an extension member.",
+  "properties": {
+    "finding_ids": {
+      "items": {
+        "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Finding Ids",
+      "type": "array"
+    },
+    "task_id": {
+      "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "finding_ids"
+  ],
+  "title": "FindingBatchResponse",
+  "type": "object"
+}

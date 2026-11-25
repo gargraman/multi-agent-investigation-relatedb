@@ -1,0 +1,42 @@
+{
+  "classification": "DEMO-LOW",
+  "collector": "relay-tap-south",
+  "evidence_id": "ev-sig-004",
+  "records": [
+    {
+      "channel": "VOICE",
+      "duration_s": 24,
+      "from_handle": "follow-93@relay.example.invalid",
+      "record_id": "ev-sig-004-r01",
+      "start": "2026-10-17T05:55:00Z",
+      "to_handle": "task-75@relay.example.invalid"
+    },
+    {
+      "channel": "TEXT",
+      "duration_s": 1,
+      "from_handle": "wren-8@relay.example.invalid",
+      "record_id": "ev-sig-004-r02",
+      "start": "2026-10-18T13:53:00Z",
+      "to_handle": "after-29@mesh.example.invalid"
+    },
+    {
+      "channel": "DATA",
+      "duration_s": 284,
+      "from_handle": "task-75@relay.example.invalid",
+      "record_id": "ev-sig-004-r03",
+      "start": "2026-10-19T10:52:00Z",
+      "to_handle": "heron-5@mesh.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 384,
+      "from_handle": "establish-42@mesh.example.invalid",
+      "record_id": "ev-sig-004-r04",
+      "start": "2026-10-21T15:53:00Z",
+      "to_handle": "skin-59@relay.example.invalid"
+    }
+  ],
+  "schema": "nexus.fixture.sigint.comms/1",
+  "summary": "Synthetic comms metadata batch (4 records).",
+  "synthetic": true
+}

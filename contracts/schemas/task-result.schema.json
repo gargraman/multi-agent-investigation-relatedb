@@ -1,0 +1,261 @@
+{
+  "$defs": {
+    "AgentId": {
+      "description": "Stable agent identifiers (spec \u00a712.2 example: ``sigint-agent``).",
+      "enum": [
+        "sigint-agent",
+        "geoint-agent",
+        "analysis-agent"
+      ],
+      "title": "AgentId",
+      "type": "string"
+    },
+    "AgentTaskStatus": {
+      "description": "Agent task status on the wire, per attempt. Names match A2A v1.0.0 ``TaskState``\n(\u00a78.2, ADR-004 C2). Note the A2A spelling ``CANCELED``.",
+      "enum": [
+        "SUBMITTED",
+        "WORKING",
+        "COMPLETED",
+        "FAILED",
+        "CANCELED",
+        "REJECTED"
+      ],
+      "title": "AgentTaskStatus",
+      "type": "string"
+    },
+    "ErrorCategory": {
+      "enum": [
+        "llm",
+        "evidence",
+        "budget",
+        "deadline",
+        "lifecycle",
+        "policy",
+        "conflict",
+        "validation"
+      ],
+      "title": "ErrorCategory",
+      "type": "string"
+    },
+    "ErrorCode": {
+      "enum": [
+        "schema_invalid",
+        "llm_unavailable",
+        "evidence_integrity_error",
+        "budget_exceeded",
+        "deadline_exceeded",
+        "agent_restarted",
+        "unknown_finding_reference",
+        "task_lost",
+        "task_rejected",
+        "investigation_deadline",
+        "stale_attempt",
+        "already_committed",
+        "investigation_cancelled",
+        "replay_objective_locked",
+        "content_conflict",
+        "replay_miss",
+        "analysis_policy_unmet"
+      ],
+      "title": "ErrorCode",
+      "type": "string"
+    },
+    "LlmMode": {
+      "description": "LLM provider mode (spec \u00a713.2/\u00a713.3, ADR-006 E3). Wire values are lower-case.",
+      "enum": [
+        "live",
+        "replay"
+      ],
+      "title": "LlmMode",
+      "type": "string"
+    },
+    "TaskError": {
+      "additionalProperties": false,
+      "description": "``error`` = ``{category, code}``; never raw content (\u00a712.2, \u00a78.7).",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/ErrorCategory"
+        },
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        }
+      },
+      "required": [
+        "category",
+        "code"
+      ],
+      "title": "TaskError",
+      "type": "object"
+    },
+    "TaskUsage": {
+      "additionalProperties": false,
+      "description": "Token usage of one attempt (\u00a78.5, \u00a712.2). ``replayed`` marks recorded usage served in\nreplay mode (\u00a713.2, ADR-006 E7); it defaults to ``false`` because the \u00a712.2 example omits it.",
+      "properties": {
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "llm_calls": {
+          "minimum": 0,
+          "title": "Llm Calls",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "replayed": {
+          "default": false,
+          "title": "Replayed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "llm_calls"
+      ],
+      "title": "TaskUsage",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``GET /v1/tasks/{id}`` body: status plus result (\u00a712.2).\n\nLocal rules: ``FAILED`` requires ``error``; only ``FAILED``/``REJECTED`` may carry one;\n``finding_ids``/``assessment_id`` only on ``COMPLETED``; ``completed_at`` only on a terminal\nstatus. ``assessment_id`` is an addition: \u00a717.1 requires Analysis to report the committed\n``assessment_id`` but the \u00a712.2 result has no field for it.",
+  "properties": {
+    "agent_id": {
+      "$ref": "#/$defs/AgentId"
+    },
+    "assessment_id": {
+      "anyOf": [
+        {
+          "pattern": "^asm_[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assessment Id"
+    },
+    "attempt": {
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "completed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Completed At"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TaskError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "finding_ids": {
+      "items": {
+        "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+        "type": "string"
+      },
+      "title": "Finding Ids",
+      "type": "array"
+    },
+    "llm_mode": {
+      "$ref": "#/$defs/LlmMode"
+    },
+    "model_id": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model Id"
+    },
+    "prompt_version": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Prompt Version"
+    },
+    "status": {
+      "$ref": "#/$defs/AgentTaskStatus"
+    },
+    "summary": {
+      "anyOf": [
+        {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Summary"
+    },
+    "task_id": {
+      "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "usage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TaskUsage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "warnings": {
+      "items": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "task_id",
+    "agent_id",
+    "status",
+    "attempt",
+    "llm_mode"
+  ],
+  "title": "TaskResult",
+  "type": "object"
+}

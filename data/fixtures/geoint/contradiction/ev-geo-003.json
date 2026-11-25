@@ -1,0 +1,18 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-003",
+  "observations": [
+    {
+      "observation_id": "ev-geo-003-o01",
+      "observed_from": "2026-10-20T08:00:00Z",
+      "observed_until": "2026-10-20T10:00:00Z",
+      "subject": "subject-alpha",
+      "x": 261.3,
+      "y": 38.2
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "mast-north-11",
+  "summary": "Synthetic sighting: one fictional subject in a northern grid cell.",
+  "synthetic": true
+}

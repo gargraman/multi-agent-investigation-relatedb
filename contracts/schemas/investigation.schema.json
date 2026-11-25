@@ -1,0 +1,309 @@
+{
+  "$defs": {
+    "AgentId": {
+      "description": "Stable agent identifiers (spec \u00a712.2 example: ``sigint-agent``).",
+      "enum": [
+        "sigint-agent",
+        "geoint-agent",
+        "analysis-agent"
+      ],
+      "title": "AgentId",
+      "type": "string"
+    },
+    "ErrorCategory": {
+      "enum": [
+        "llm",
+        "evidence",
+        "budget",
+        "deadline",
+        "lifecycle",
+        "policy",
+        "conflict",
+        "validation"
+      ],
+      "title": "ErrorCategory",
+      "type": "string"
+    },
+    "ErrorCode": {
+      "enum": [
+        "schema_invalid",
+        "llm_unavailable",
+        "evidence_integrity_error",
+        "budget_exceeded",
+        "deadline_exceeded",
+        "agent_restarted",
+        "unknown_finding_reference",
+        "task_lost",
+        "task_rejected",
+        "investigation_deadline",
+        "stale_attempt",
+        "already_committed",
+        "investigation_cancelled",
+        "replay_objective_locked",
+        "content_conflict",
+        "replay_miss",
+        "analysis_policy_unmet"
+      ],
+      "title": "ErrorCode",
+      "type": "string"
+    },
+    "InvestigationStatus": {
+      "enum": [
+        "CREATED",
+        "RUNNING",
+        "ANALYZING",
+        "COMPLETED",
+        "PARTIAL",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "InvestigationStatus",
+      "type": "string"
+    },
+    "OrchestratorTaskState": {
+      "description": "What the orchestrator knows about a task (\u00a78.2), including ``PENDING``/``TIMED_OUT``.",
+      "enum": [
+        "PENDING",
+        "DISPATCHED",
+        "RUNNING",
+        "COMPLETED",
+        "FAILED",
+        "TIMED_OUT",
+        "CANCELLED"
+      ],
+      "title": "OrchestratorTaskState",
+      "type": "string"
+    },
+    "TaskUsage": {
+      "additionalProperties": false,
+      "description": "Token usage of one attempt (\u00a78.5, \u00a712.2). ``replayed`` marks recorded usage served in\nreplay mode (\u00a713.2, ADR-006 E7); it defaults to ``false`` because the \u00a712.2 example omits it.",
+      "properties": {
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "llm_calls": {
+          "minimum": 0,
+          "title": "Llm Calls",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "replayed": {
+          "default": false,
+          "title": "Replayed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "llm_calls"
+      ],
+      "title": "TaskUsage",
+      "type": "object"
+    },
+    "TaskView": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "attempt": {
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "deadline": {
+          "format": "date-time",
+          "title": "Deadline",
+          "type": "string"
+        },
+        "error_category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCategory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "finding_ids": {
+          "items": {
+            "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "title": "Finding Ids",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/OrchestratorTaskState"
+        },
+        "status_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "task_type": {
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Task Type",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "agent_id",
+        "task_type",
+        "status",
+        "attempt",
+        "deadline",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "TaskView",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "assessment_id": {
+      "anyOf": [
+        {
+          "pattern": "^asm_[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assessment Id"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "deadline": {
+      "format": "date-time",
+      "title": "Deadline",
+      "type": "string"
+    },
+    "id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "objective": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "scenario_id": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Scenario Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/InvestigationStatus"
+    },
+    "status_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/TaskView"
+      },
+      "title": "Tasks",
+      "type": "array"
+    },
+    "token_budget": {
+      "exclusiveMinimum": 0,
+      "title": "Token Budget",
+      "type": "integer"
+    },
+    "tokens_used": {
+      "minimum": 0,
+      "title": "Tokens Used",
+      "type": "integer"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "scenario_id",
+    "objective",
+    "status",
+    "tokens_used",
+    "token_budget",
+    "deadline",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "Investigation",
+  "type": "object"
+}

@@ -1,0 +1,34 @@
+{
+  "classification": "DEMO-LOW",
+  "collector": "mesh-tap-west",
+  "evidence_id": "ev-sig-013",
+  "records": [
+    {
+      "channel": "DATA",
+      "duration_s": 35,
+      "from_handle": "great-88@relay.example.invalid",
+      "record_id": "ev-sig-013-r01",
+      "start": "2026-10-12T03:40:00Z",
+      "to_handle": "fund-11@mesh.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 267,
+      "from_handle": "wrong-10@relay.example.invalid",
+      "record_id": "ev-sig-013-r02",
+      "start": "2026-10-12T14:48:00Z",
+      "to_handle": "great-88@relay.example.invalid"
+    },
+    {
+      "channel": "DATA",
+      "duration_s": 178,
+      "from_handle": "fund-11@mesh.example.invalid",
+      "record_id": "ev-sig-013-r03",
+      "start": "2026-10-15T12:46:00Z",
+      "to_handle": "stoat-0@relay.example.invalid"
+    }
+  ],
+  "schema": "nexus.fixture.sigint.comms/1",
+  "summary": "Synthetic comms metadata batch (3 records).",
+  "synthetic": true
+}

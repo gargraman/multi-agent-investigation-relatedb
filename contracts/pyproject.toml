@@ -5,6 +5,7 @@ description = "Pydantic contracts (source of truth) for Nexus APIs, A2A tasks an
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
+    "pyyaml>=6",
 ]
 
 [build-system]

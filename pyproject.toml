@@ -16,6 +16,7 @@ exclude = ["spikes/*", "spikes"]
 
 [dependency-groups]
 dev = [
+    "faker>=30",
     "pytest",
     "ruff",
 ]

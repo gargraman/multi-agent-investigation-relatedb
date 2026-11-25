@@ -1,0 +1,58 @@
+{
+  "classification": "DEMO-LOW",
+  "collector": "mesh-tap-east",
+  "evidence_id": "ev-sig-006",
+  "records": [
+    {
+      "channel": "TEXT",
+      "duration_s": 1,
+      "from_handle": "practice-33@mesh.example.invalid",
+      "record_id": "ev-sig-006-r01",
+      "start": "2026-10-11T11:14:00Z",
+      "to_handle": "mission-41@mesh.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 628,
+      "from_handle": "fund-11@mesh.example.invalid",
+      "record_id": "ev-sig-006-r02",
+      "start": "2026-10-12T05:56:00Z",
+      "to_handle": "heron-5@mesh.example.invalid"
+    },
+    {
+      "channel": "DATA",
+      "duration_s": 157,
+      "from_handle": "kestrel-7@relay.example.invalid",
+      "record_id": "ev-sig-006-r03",
+      "start": "2026-10-14T03:33:00Z",
+      "to_handle": "top-38@mesh.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 581,
+      "from_handle": "osprey-9@relay.example.invalid",
+      "record_id": "ev-sig-006-r04",
+      "start": "2026-10-14T20:15:00Z",
+      "to_handle": "top-38@mesh.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 363,
+      "from_handle": "kestrel-alt@mesh.example.invalid",
+      "record_id": "ev-sig-006-r05",
+      "start": "2026-10-16T17:38:00Z",
+      "to_handle": "less-18@relay.example.invalid"
+    },
+    {
+      "channel": "TEXT",
+      "duration_s": 1,
+      "from_handle": "fund-11@mesh.example.invalid",
+      "record_id": "ev-sig-006-r06",
+      "start": "2026-10-17T04:22:00Z",
+      "to_handle": "mission-41@mesh.example.invalid"
+    }
+  ],
+  "schema": "nexus.fixture.sigint.comms/1",
+  "summary": "Synthetic comms metadata batch (6 records).",
+  "synthetic": true
+}

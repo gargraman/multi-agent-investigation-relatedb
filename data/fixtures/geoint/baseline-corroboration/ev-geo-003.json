@@ -1,0 +1,58 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-003",
+  "observations": [
+    {
+      "observation_id": "ev-geo-003-o01",
+      "observed_from": "2026-10-10T05:10:00Z",
+      "observed_until": "2026-10-10T06:40:00Z",
+      "subject": "vehicle-grey-van",
+      "x": 488.0,
+      "y": 76.2
+    },
+    {
+      "observation_id": "ev-geo-003-o02",
+      "observed_from": "2026-10-11T07:00:00Z",
+      "observed_until": "2026-10-11T08:00:00Z",
+      "subject": "unidentified-pedestrian-SS",
+      "x": 567.6,
+      "y": 134.7
+    },
+    {
+      "observation_id": "ev-geo-003-o03",
+      "observed_from": "2026-10-13T00:50:00Z",
+      "observed_until": "2026-10-13T01:35:00Z",
+      "subject": "subject-alpha",
+      "x": 141.7,
+      "y": 221.4
+    },
+    {
+      "observation_id": "ev-geo-003-o04",
+      "observed_from": "2026-10-14T02:30:00Z",
+      "observed_until": "2026-10-14T04:30:00Z",
+      "subject": "subject-echo",
+      "x": 243.7,
+      "y": 290.2
+    },
+    {
+      "observation_id": "ev-geo-003-o05",
+      "observed_from": "2026-10-14T15:50:00Z",
+      "observed_until": "2026-10-14T16:50:00Z",
+      "subject": "unidentified-vehicle-TL",
+      "x": 289.0,
+      "y": 223.4
+    },
+    {
+      "observation_id": "ev-geo-003-o06",
+      "observed_from": "2026-10-15T03:20:00Z",
+      "observed_until": "2026-10-15T03:40:00Z",
+      "subject": "subject-charlie",
+      "x": 349.4,
+      "y": 177.8
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "mast-north-11",
+  "summary": "Synthetic sightings batch (6 observations).",
+  "synthetic": true
+}

@@ -1,0 +1,513 @@
+{
+  "$defs": {
+    "AgentId": {
+      "description": "Stable agent identifiers (spec \u00a712.2 example: ``sigint-agent``).",
+      "enum": [
+        "sigint-agent",
+        "geoint-agent",
+        "analysis-agent"
+      ],
+      "title": "AgentId",
+      "type": "string"
+    },
+    "AssertionType": {
+      "description": "Structured agent facts (ADR-007): SIGINT asserts LINKED_TO, GEOINT asserts PLACED_AT.",
+      "enum": [
+        "LINKED_TO",
+        "PLACED_AT"
+      ],
+      "title": "AssertionType",
+      "type": "string"
+    },
+    "Classification": {
+      "description": "Fictional demo classification levels (spec \u00a79.3).",
+      "enum": [
+        "DEMO-LOW",
+        "DEMO-MID",
+        "DEMO-HIGH"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "EntityType": {
+      "description": "Entity types (spec \u00a79.1). ``LOCATION`` entities are fictional grid cells.",
+      "enum": [
+        "PERSON",
+        "HANDLE",
+        "ORG",
+        "ASSET",
+        "LOCATION"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    },
+    "EvidencePair": {
+      "additionalProperties": false,
+      "description": "Two evidence items whose findings must be related (CORROBORATES or CONTRADICTS).",
+      "properties": {
+        "about": {
+          "description": "Manifest entity IDs both findings concern.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "About",
+          "type": "array"
+        },
+        "evidence": {
+          "description": "The two evidence IDs, one per finding.",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Evidence",
+          "type": "array"
+        },
+        "note": {
+          "default": "",
+          "description": "Human-readable reason, for reviewers only.",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "about",
+        "evidence"
+      ],
+      "title": "EvidencePair",
+      "type": "object"
+    },
+    "EvidenceRef": {
+      "additionalProperties": false,
+      "description": "Reference to one evidence fixture. ``file`` is relative to ``data/fixtures/``.",
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "file": {
+          "minLength": 1,
+          "title": "File",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "owner_node": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "owner_node",
+        "file",
+        "sha256",
+        "classification"
+      ],
+      "title": "EvidenceRef",
+      "type": "object"
+    },
+    "ExpectedDenial": {
+      "additionalProperties": false,
+      "description": "Findings from these evidence items must be withheld from ``agent`` (spec \u00a79.5, AC18).",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "outcome": {
+          "enum": [
+            "FILTERED",
+            "DENIED"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "evidence",
+        "outcome"
+      ],
+      "title": "ExpectedDenial",
+      "type": "object"
+    },
+    "ExpectedFinding": {
+      "additionalProperties": false,
+      "description": "A finding a correct run must contain, identified by agent, subject and evidence.",
+      "properties": {
+        "about": {
+          "description": "Manifest entity IDs the finding is ABOUT.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "About",
+          "type": "array"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "assertion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssertionType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Structured assertion the finding must carry (ADR-007), if any."
+        },
+        "evidence": {
+          "description": "Manifest evidence IDs the finding must cite.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/FindingKind"
+        }
+      },
+      "required": [
+        "agent",
+        "kind",
+        "about"
+      ],
+      "title": "ExpectedFinding",
+      "type": "object"
+    },
+    "FindingKind": {
+      "description": "Finding kind (spec \u00a79.1, \u00a79.2): P0 folds \"Observation\" into Finding.",
+      "enum": [
+        "OBSERVATION",
+        "INFERENCE"
+      ],
+      "title": "FindingKind",
+      "type": "string"
+    },
+    "Grid": {
+      "additionalProperties": false,
+      "description": "Fictional cartesian grid (ADR-007 G6). Cell (col, row) spans\n``[origin + col*pitch, origin + (col+1)*pitch)`` on x, likewise on y.",
+      "properties": {
+        "cols": {
+          "exclusiveMinimum": 0,
+          "title": "Cols",
+          "type": "integer"
+        },
+        "origin": {
+          "$ref": "#/$defs/Point"
+        },
+        "pitch": {
+          "exclusiveMinimum": 0,
+          "title": "Pitch",
+          "type": "number"
+        },
+        "rows": {
+          "exclusiveMinimum": 0,
+          "title": "Rows",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "origin",
+        "pitch",
+        "cols",
+        "rows"
+      ],
+      "title": "Grid",
+      "type": "object"
+    },
+    "HiddenPath": {
+      "additionalProperties": false,
+      "description": "An I4 path A -SIGINT-> via -GEOINT-> B with no direct A-B link (ADR-007 G2, G4).",
+      "properties": {
+        "a": {
+          "title": "A",
+          "type": "string"
+        },
+        "b": {
+          "title": "B",
+          "type": "string"
+        },
+        "via": {
+          "title": "Via",
+          "type": "string"
+        }
+      },
+      "required": [
+        "a",
+        "via",
+        "b"
+      ],
+      "title": "HiddenPath",
+      "type": "object"
+    },
+    "ManifestEntity": {
+      "additionalProperties": false,
+      "description": "A canonical fictional entity (spec \u00a79.1). IDs are stable and never aliased (ADR-006 E1).",
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "display_name": {
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "LOCATION only: the cell centre."
+        },
+        "type": {
+          "$ref": "#/$defs/EntityType"
+        },
+        "used_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "HANDLE only: the PERSON using it.",
+          "title": "Used By"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "display_name"
+      ],
+      "title": "ManifestEntity",
+      "type": "object"
+    },
+    "Oracle": {
+      "additionalProperties": false,
+      "description": "Expected results of a scenario run (spec \u00a711.3).",
+      "properties": {
+        "canary_strings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Canary Strings",
+          "type": "array"
+        },
+        "contradictions": {
+          "items": {
+            "$ref": "#/$defs/EvidencePair"
+          },
+          "title": "Contradictions",
+          "type": "array"
+        },
+        "corroborations": {
+          "items": {
+            "$ref": "#/$defs/EvidencePair"
+          },
+          "title": "Corroborations",
+          "type": "array"
+        },
+        "expected_denials": {
+          "items": {
+            "$ref": "#/$defs/ExpectedDenial"
+          },
+          "title": "Expected Denials",
+          "type": "array"
+        },
+        "expected_findings": {
+          "items": {
+            "$ref": "#/$defs/ExpectedFinding"
+          },
+          "title": "Expected Findings",
+          "type": "array"
+        },
+        "hidden_paths": {
+          "items": {
+            "$ref": "#/$defs/HiddenPath"
+          },
+          "title": "Hidden Paths",
+          "type": "array"
+        }
+      },
+      "title": "Oracle",
+      "type": "object"
+    },
+    "Point": {
+      "additionalProperties": false,
+      "description": "A cartesian point in abstract grid units (fictional, not WGS-84).",
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Point",
+      "type": "object"
+    },
+    "Template": {
+      "additionalProperties": false,
+      "properties": {
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TemplateTask"
+          },
+          "minItems": 1,
+          "title": "Tasks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "tasks"
+      ],
+      "title": "Template",
+      "type": "object"
+    },
+    "TemplateTask": {
+      "additionalProperties": false,
+      "description": "One task the orchestrator creates for an investigation (spec \u00a76.2, \u00a78.5).",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "input_refs": {
+          "description": "Evidence IDs.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Refs",
+          "type": "array"
+        },
+        "task_type": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Task Type",
+          "type": "string"
+        },
+        "token_share": {
+          "description": "Reservation of the token cap (\u00a78.5).",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Token Share",
+          "type": "number"
+        }
+      },
+      "required": [
+        "agent",
+        "task_type",
+        "token_share"
+      ],
+      "title": "TemplateTask",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``data/scenarios/<id>/manifest.yaml`` (spec \u00a711.3).",
+  "properties": {
+    "entities": {
+      "items": {
+        "$ref": "#/$defs/ManifestEntity"
+      },
+      "minItems": 1,
+      "title": "Entities",
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      },
+      "minItems": 1,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "grid": {
+      "$ref": "#/$defs/Grid"
+    },
+    "objective": {
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "oracle": {
+      "$ref": "#/$defs/Oracle"
+    },
+    "scenario_id": {
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "title": "Scenario Id",
+      "type": "string"
+    },
+    "synthetic": {
+      "const": true,
+      "title": "Synthetic",
+      "type": "boolean"
+    },
+    "template": {
+      "$ref": "#/$defs/Template"
+    },
+    "version": {
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scenario_id",
+    "version",
+    "synthetic",
+    "objective",
+    "template",
+    "grid",
+    "entities",
+    "evidence",
+    "oracle"
+  ],
+  "title": "ScenarioManifest",
+  "type": "object"
+}

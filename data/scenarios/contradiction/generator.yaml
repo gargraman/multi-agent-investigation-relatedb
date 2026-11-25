@@ -1,0 +1,14 @@
+# Noise generator config for scripts/gen_scenario.py (spec §11.2). Evidence ids listed under
+# `noise` are GENERATED and overwritten on every run; every other evidence file in the manifest is
+# hand-authored signal and is never written by the generator.
+seed: 7302
+time_range: {start: "2026-10-17T00:00:00Z", end: "2026-10-23T00:00:00Z"}
+noise:
+  sigint:
+    ids: [ev-sig-001, ev-sig-002, ev-sig-003, ev-sig-004, ev-sig-005, ev-sig-007, ev-sig-008, ev-sig-009, ev-sig-010, ev-sig-011, ev-sig-012]
+    records_per_file: [3, 6]
+    unresolved_handles: 8
+  geoint:
+    ids: [ev-geo-001, ev-geo-002, ev-geo-004, ev-geo-005, ev-geo-006, ev-geo-007, ev-geo-009, ev-geo-010, ev-geo-011, ev-geo-012]
+    observations_per_file: [3, 6]
+    unresolved_subjects: 4

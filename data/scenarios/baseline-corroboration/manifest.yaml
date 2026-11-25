@@ -1,0 +1,123 @@
+# Nexus scenario manifest (spec §11.3). SYNTHETIC: every name, handle, place and event is invented.
+# Region: the fictional "Vellmark grid" (abstract cartesian units, not a real map).
+# Evidence sha256 values are written by `uv run python scripts/gen_scenario.py`; do not hand-edit them.
+# Which evidence items are generated noise is declared in generator.yaml (kept out of this file
+# so evidence ids and fixtures carry no signal/noise hint).
+scenario_id: baseline-corroboration
+version: 1.0.0
+synthetic: true
+objective: >-
+  Identify recurring contact and co-location patterns among the fictional subjects in the supplied
+  synthetic metadata, and assess whether any subjects are connected.
+template:
+  tasks:
+    - agent: sigint-agent
+      task_type: analyze_synthetic_communications
+      token_share: 0.25
+      input_refs: [ev-sig-001, ev-sig-002, ev-sig-003, ev-sig-004, ev-sig-005, ev-sig-006, ev-sig-007, ev-sig-008, ev-sig-009, ev-sig-010, ev-sig-011, ev-sig-012, ev-sig-013, ev-sig-014]
+    - agent: geoint-agent
+      task_type: analyze_synthetic_geospatial
+      token_share: 0.25
+      input_refs: [ev-geo-001, ev-geo-002, ev-geo-003, ev-geo-004, ev-geo-005, ev-geo-006, ev-geo-007, ev-geo-008, ev-geo-009, ev-geo-010, ev-geo-011, ev-geo-012, ev-geo-013, ev-geo-014, ev-geo-015]
+    - agent: analysis-agent
+      task_type: assess_findings
+      token_share: 0.5
+      input_refs: []
+grid: {origin: {x: 0, y: 0}, pitch: 100, cols: 6, rows: 4}
+entities:
+  # People (codenames only; no real-world identity)
+  - {id: ENT-ALPHA, type: PERSON, display_name: Subject ALPHA, aliases: [subject-alpha]}
+  - {id: ENT-BRAVO, type: PERSON, display_name: Subject BRAVO, aliases: [subject-bravo]}
+  - {id: ENT-CHARLIE, type: PERSON, display_name: Subject CHARLIE, aliases: [subject-charlie]}
+  - {id: ENT-DELTA, type: PERSON, display_name: Subject DELTA, aliases: [subject-delta]}
+  - {id: ENT-ECHO, type: PERSON, display_name: Subject ECHO, aliases: [subject-echo]}
+  - {id: ENT-FOXTROT, type: PERSON, display_name: Subject FOXTROT, aliases: [subject-foxtrot]}
+  # Handles: reserved .invalid domains (RFC 2606), never routable or real
+  - {id: HDL-ALPHA-1, type: HANDLE, display_name: kestrel-7, aliases: [kestrel-7@relay.example.invalid], used_by: ENT-ALPHA}
+  - {id: HDL-ALPHA-2, type: HANDLE, display_name: kestrel-alt, aliases: [kestrel-alt@mesh.example.invalid], used_by: ENT-ALPHA}
+  - {id: HDL-BRAVO-1, type: HANDLE, display_name: osprey-9, aliases: [osprey-9@relay.example.invalid], used_by: ENT-BRAVO}
+  - {id: HDL-CHARLIE-1, type: HANDLE, display_name: marten-3, aliases: [marten-3@relay.example.invalid], used_by: ENT-CHARLIE}
+  - {id: HDL-DELTA-1, type: HANDLE, display_name: heron-5, aliases: [heron-5@mesh.example.invalid], used_by: ENT-DELTA}
+  - {id: HDL-ECHO-1, type: HANDLE, display_name: lynx-2, aliases: [lynx-2@mesh.example.invalid], used_by: ENT-ECHO}
+  - {id: HDL-FOXTROT-1, type: HANDLE, display_name: wren-8, aliases: [wren-8@relay.example.invalid], used_by: ENT-FOXTROT}
+  - {id: HDL-UNATTRIB-1, type: HANDLE, display_name: stoat-0, aliases: [stoat-0@relay.example.invalid]}
+  # Asset and organization (invented)
+  - {id: AST-VAN-1, type: ASSET, display_name: Grey panel van (fictional), aliases: [vehicle-grey-van]}
+  - {id: ORG-OBSIDIAN-LOOM, type: ORG, display_name: Obsidian Loom Collective (fictional), aliases: [obsidian-loom]}
+  # Grid cells of the fictional Vellmark grid: LOC-GRID-<row*cols+col>, position = cell centre
+  - {id: LOC-GRID-00, type: LOCATION, display_name: Vellmark cell C0-R0, aliases: [], position: {x: 50, y: 50}}
+  - {id: LOC-GRID-01, type: LOCATION, display_name: Vellmark cell C1-R0, aliases: [], position: {x: 150, y: 50}}
+  - {id: LOC-GRID-02, type: LOCATION, display_name: Vellmark cell C2-R0, aliases: [], position: {x: 250, y: 50}}
+  - {id: LOC-GRID-03, type: LOCATION, display_name: Vellmark cell C3-R0, aliases: [], position: {x: 350, y: 50}}
+  - {id: LOC-GRID-04, type: LOCATION, display_name: Vellmark cell C4-R0, aliases: [], position: {x: 450, y: 50}}
+  - {id: LOC-GRID-05, type: LOCATION, display_name: Vellmark cell C5-R0, aliases: [], position: {x: 550, y: 50}}
+  - {id: LOC-GRID-06, type: LOCATION, display_name: Vellmark cell C0-R1, aliases: [], position: {x: 50, y: 150}}
+  - {id: LOC-GRID-07, type: LOCATION, display_name: Vellmark cell C1-R1, aliases: [], position: {x: 150, y: 150}}
+  - {id: LOC-GRID-08, type: LOCATION, display_name: Vellmark cell C2-R1, aliases: [], position: {x: 250, y: 150}}
+  - {id: LOC-GRID-09, type: LOCATION, display_name: Vellmark cell C3-R1, aliases: [], position: {x: 350, y: 150}}
+  - {id: LOC-GRID-10, type: LOCATION, display_name: Vellmark cell C4-R1, aliases: [], position: {x: 450, y: 150}}
+  - {id: LOC-GRID-11, type: LOCATION, display_name: Vellmark cell C5-R1, aliases: [], position: {x: 550, y: 150}}
+  - {id: LOC-GRID-12, type: LOCATION, display_name: Vellmark cell C0-R2, aliases: [], position: {x: 50, y: 250}}
+  - {id: LOC-GRID-13, type: LOCATION, display_name: Vellmark cell C1-R2, aliases: [], position: {x: 150, y: 250}}
+  - {id: LOC-GRID-14, type: LOCATION, display_name: Vellmark cell C2-R2, aliases: [], position: {x: 250, y: 250}}
+  - {id: LOC-GRID-15, type: LOCATION, display_name: Vellmark cell C3-R2, aliases: [], position: {x: 350, y: 250}}
+  - {id: LOC-GRID-16, type: LOCATION, display_name: Vellmark cell C4-R2, aliases: [], position: {x: 450, y: 250}}
+  - {id: LOC-GRID-17, type: LOCATION, display_name: Vellmark cell C5-R2, aliases: [], position: {x: 550, y: 250}}
+  - {id: LOC-GRID-18, type: LOCATION, display_name: Vellmark cell C0-R3, aliases: [], position: {x: 50, y: 350}}
+  - {id: LOC-GRID-19, type: LOCATION, display_name: Vellmark cell C1-R3, aliases: [], position: {x: 150, y: 350}}
+  - {id: LOC-GRID-20, type: LOCATION, display_name: Vellmark cell C2-R3, aliases: [], position: {x: 250, y: 350}}
+  - {id: LOC-GRID-21, type: LOCATION, display_name: Vellmark cell C3-R3, aliases: [], position: {x: 350, y: 350}}
+  - {id: LOC-GRID-22, type: LOCATION, display_name: Vellmark cell C4-R3, aliases: [], position: {x: 450, y: 350}}
+  - {id: LOC-GRID-23, type: LOCATION, display_name: Vellmark cell C5-R3, aliases: [], position: {x: 550, y: 350}}
+evidence:
+  - {id: ev-sig-001, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-001.json, sha256: "47b74a015a8fdf2120b56bda77b63577fca5df2c4b6d4413acdabb879e6319cd"}
+  - {id: ev-sig-002, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-002.json, sha256: "1d31918d44674f7a74b0c8f6376145bf44d7a78f967f4d2822bc631f65af70ac"}
+  - {id: ev-sig-003, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-003.json, sha256: "b4c3f18de0b82a5c14304f454ae77fd3c913de402a2067bbb45e7ce5bda78a3c"}
+  - {id: ev-sig-004, owner_node: sigint-agent, classification: DEMO-MID, file: sigint/baseline-corroboration/ev-sig-004.json, sha256: "55691e1f30a9c582891410bbed07b037f2ca2d326f7aace125e1f7a68e8fdeae"}
+  - {id: ev-sig-005, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-005.json, sha256: "d5ea150a53df80f8faf819b14a05911bf46cfc45ac7b2bddb845e906da379302"}
+  - {id: ev-sig-006, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-006.json, sha256: "bcd77d70a1fe5d072c8cb530e3ebf36cb9c4e0e0afc0c1769e9ebe4bd06390a6"}
+  - {id: ev-sig-007, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-007.json, sha256: "d335260262c8689e1826e0d879451f5661ccf85dd40c26c1cd7094c56bff99f4"}
+  - {id: ev-sig-008, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-008.json, sha256: "ccd368c0d799bbf66faac07870ab1befb05a831ada4a70aae7b4f67d0b4abd2b"}
+  - {id: ev-sig-009, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-009.json, sha256: "62838bc399e8f38c7675440f7cbdbe545ca9ad086d87055f29683eb53a278cb6"}
+  - {id: ev-sig-010, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-010.json, sha256: "1fb303b0119cbb2fc396120a1970eb65d92ef254da5183e1f0d692192849ec88"}
+  - {id: ev-sig-011, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-011.json, sha256: "56cf7007f8af67fd76e68f70fbbf75d47051c57838be676060c04cb3bd57bddf"}
+  - {id: ev-sig-012, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-012.json, sha256: "d87c19fefb2061d1788833cf13b6d12ad97899f88b80a57fcfa06ef4e885295f"}
+  - {id: ev-sig-013, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-013.json, sha256: "850ec1e3eea25efbce854c78ba6c93cf0ce42352b5b4a5f43ec061fa790b66a7"}
+  - {id: ev-sig-014, owner_node: sigint-agent, classification: DEMO-LOW, file: sigint/baseline-corroboration/ev-sig-014.json, sha256: "f956747bb9b7f979027e2a49c5ff96d27bb9557719bf3f2d08b520edc286859e"}
+  - {id: ev-geo-001, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-001.json, sha256: "26cd4963c3c65486e2cae0d575230bca7efa581b1327d7e0499a84a906e34575"}
+  - {id: ev-geo-002, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-002.json, sha256: "55dc1bc9714e40ea6dae2e8fa131a0eb6c0570e6b313a9a15d34024733420b6c"}
+  - {id: ev-geo-003, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-003.json, sha256: "52e28b3b41ebdde6eb05522f7dc27d39b164ec4b61050b64db24a2a065e02766"}
+  - {id: ev-geo-004, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-004.json, sha256: "6dda26a7e0d0404a371e05c6bc2bd6f5be43b0c3fa5705cb66dbabda5b404c2e"}
+  - {id: ev-geo-005, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-005.json, sha256: "45b9b4552cb639c0ecd4be4a7c5101e78a4c658e439909259ffe9e2eb982f827"}
+  - {id: ev-geo-006, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-006.json, sha256: "dc216b814944e35b8a78becefefdf5727a8f6d670ab2ec095e65cfd797647f9f"}
+  - {id: ev-geo-007, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-007.json, sha256: "a67179b63903f2a2baca219c4509642b55a3ca0a27b1a06417061dc058455135"}
+  - {id: ev-geo-008, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-008.json, sha256: "e23a1e712d6efcef7f9b476546c6e32b0256c0e67f70e7f0c4a0bb7d64fa665a"}
+  - {id: ev-geo-009, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-009.json, sha256: "05764bab5be5782992a51254f0c25f0b7dfdae7f1c1a4f6c53bfffd9931a56b4"}
+  - {id: ev-geo-010, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-010.json, sha256: "466459bdd2f823964a41234012d5719ade91c65a2f187d7d75738225ad95a4dc"}
+  - {id: ev-geo-011, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-011.json, sha256: "5ea31beb844e1438adcf4f9372b93caad1b3163baf410732be277b4672a40ef7"}
+  - {id: ev-geo-012, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-012.json, sha256: "90214895c1fcdd9ded09812b36847def098f590499dbb2b6d52428a377e5f363"}
+  - {id: ev-geo-013, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-013.json, sha256: "f47bc0dd9282cccb036e59bdb2686c6c9fcd4f73731bd5db908ba3a18ce64440"}
+  - {id: ev-geo-014, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-014.json, sha256: "d53a7a04b535dd76dc6126c75a61508d6ced85a484d99f12f144a18ee85630b2"}
+  - {id: ev-geo-015, owner_node: geoint-agent, classification: DEMO-LOW, file: geoint/baseline-corroboration/ev-geo-015.json, sha256: "fc60ab49673877a8346a934650e89f94e748916b482b138736871947f0245a20"}
+oracle:
+  # Planted I4 pattern (ADR-007 G2/G4):
+  #   HDL-ALPHA-1 USED_BY ENT-ALPHA, HDL-CHARLIE-1 USED_BY ENT-CHARLIE (manifest)
+  #   SIGINT ev-sig-004: HDL-ALPHA-1 <-> HDL-CHARLIE-1, 4 contacts 2026-10-12..15 ~07:00Z
+  #   GEOINT ev-geo-002: ENT-CHARLIE at LOC-GRID-14 [2026-10-14T09:00Z, 11:00Z)
+  #   GEOINT ev-geo-007: ENT-BRAVO   at LOC-GRID-15 [2026-10-14T10:00Z, 12:00Z)  (neighbour, overlap 10:00-11:00)
+  #   No direct ALPHA-BRAVO link: no manifest relation, no contact, no co-location (incl. noise).
+  # Corroboration: SIGINT ev-sig-009 DELTA<->ECHO contact at 2026-10-16T13:40Z falls inside
+  #   GEOINT ev-geo-011 co-location of DELTA and ECHO at LOC-GRID-04 [13:30Z, 14:30Z).
+  expected_findings:
+    - {agent: sigint-agent, kind: OBSERVATION, assertion: LINKED_TO, about: [HDL-ALPHA-1, HDL-CHARLIE-1], evidence: [ev-sig-004]}
+    - {agent: sigint-agent, kind: OBSERVATION, assertion: LINKED_TO, about: [HDL-DELTA-1, HDL-ECHO-1], evidence: [ev-sig-009]}
+    - {agent: geoint-agent, kind: OBSERVATION, assertion: PLACED_AT, about: [ENT-CHARLIE, LOC-GRID-14], evidence: [ev-geo-002]}
+    - {agent: geoint-agent, kind: OBSERVATION, assertion: PLACED_AT, about: [ENT-BRAVO, LOC-GRID-15], evidence: [ev-geo-007]}
+    - {agent: geoint-agent, kind: OBSERVATION, assertion: PLACED_AT, about: [ENT-DELTA, ENT-ECHO, LOC-GRID-04], evidence: [ev-geo-011]}
+  corroborations:
+    - {about: [ENT-DELTA, ENT-ECHO], evidence: [ev-sig-009, ev-geo-011], note: contact inside the co-location window}
+  contradictions: []
+  hidden_paths:
+    - {a: ENT-ALPHA, via: ENT-CHARLIE, b: ENT-BRAVO}
+  expected_denials: []
+  canary_strings: []

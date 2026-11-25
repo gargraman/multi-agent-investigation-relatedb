@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "Classification": {
+      "description": "Fictional demo classification levels (spec \u00a79.3).",
+      "enum": [
+        "DEMO-LOW",
+        "DEMO-MID",
+        "DEMO-HIGH"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "TraceContext": {
+      "additionalProperties": false,
+      "description": "W3C trace context propagated in the task body (\u00a78.7, ADR-003 consequences).",
+      "properties": {
+        "traceparent": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Traceparent",
+          "type": "string"
+        },
+        "tracestate": {
+          "default": "",
+          "maxLength": 512,
+          "title": "Tracestate",
+          "type": "string"
+        }
+      },
+      "required": [
+        "traceparent"
+      ],
+      "title": "TraceContext",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``POST /v1/tasks`` body (\u00a712.2). The agent dedups on ``(task_id, attempt)`` (\u00a78.3).",
+  "properties": {
+    "attempt": {
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "classification_ceiling": {
+      "$ref": "#/$defs/Classification"
+    },
+    "contract_version": {
+      "pattern": "^\\d+\\.\\d+$",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "deadline": {
+      "description": "Absolute; agent self-cancels at +5 s (\u00a78.3).",
+      "format": "date-time",
+      "title": "Deadline",
+      "type": "string"
+    },
+    "input_refs": {
+      "description": "Evidence manifest ids (\u00a711.3 step 2).",
+      "items": {
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Input Refs",
+      "type": "array"
+    },
+    "investigation_id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Investigation Id",
+      "type": "string"
+    },
+    "objective": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "scenario_id": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Scenario Id",
+      "type": "string"
+    },
+    "task_id": {
+      "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "task_type": {
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "title": "Task Type",
+      "type": "string"
+    },
+    "token_budget": {
+      "description": "Tokens this attempt may spend (\u00a78.5).",
+      "exclusiveMinimum": 0,
+      "title": "Token Budget",
+      "type": "integer"
+    },
+    "trace_context": {
+      "$ref": "#/$defs/TraceContext"
+    }
+  },
+  "required": [
+    "task_id",
+    "investigation_id",
+    "task_type",
+    "objective",
+    "input_refs",
+    "scenario_id",
+    "classification_ceiling",
+    "attempt",
+    "token_budget",
+    "deadline",
+    "contract_version",
+    "trace_context"
+  ],
+  "title": "TaskRequest",
+  "type": "object"
+}

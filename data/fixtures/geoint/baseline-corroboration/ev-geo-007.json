@@ -1,0 +1,18 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-007",
+  "observations": [
+    {
+      "observation_id": "ev-geo-007-o01",
+      "observed_from": "2026-10-14T10:00:00Z",
+      "observed_until": "2026-10-14T12:00:00Z",
+      "subject": "subject-bravo",
+      "x": 362.7,
+      "y": 244.9
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "drone-relay-2",
+  "summary": "Synthetic sighting: one fictional subject dwelling in a single grid cell.",
+  "synthetic": true
+}

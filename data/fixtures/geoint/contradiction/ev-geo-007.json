@@ -1,0 +1,34 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-007",
+  "observations": [
+    {
+      "observation_id": "ev-geo-007-o01",
+      "observed_from": "2026-10-18T16:00:00Z",
+      "observed_until": "2026-10-18T16:20:00Z",
+      "subject": "unidentified-pedestrian-BS",
+      "x": 177.1,
+      "y": 191.5
+    },
+    {
+      "observation_id": "ev-geo-007-o02",
+      "observed_from": "2026-10-19T20:00:00Z",
+      "observed_until": "2026-10-19T22:00:00Z",
+      "subject": "subject-bravo",
+      "x": 427.0,
+      "y": 29.3
+    },
+    {
+      "observation_id": "ev-geo-007-o03",
+      "observed_from": "2026-10-20T05:40:00Z",
+      "observed_until": "2026-10-20T07:40:00Z",
+      "subject": "subject-bravo",
+      "x": 252.0,
+      "y": 225.9
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "mast-north-11",
+  "summary": "Synthetic sightings batch (3 observations).",
+  "synthetic": true
+}

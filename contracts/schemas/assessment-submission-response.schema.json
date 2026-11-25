@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "EdgeType": {
+      "description": "Finding\u2192finding edges Analysis may propose (\u00a79.3, \u00a712.3).",
+      "enum": [
+        "CORROBORATES",
+        "CONTRADICTS",
+        "DERIVED_FROM"
+      ],
+      "title": "EdgeType",
+      "type": "string"
+    },
+    "ErrorCode": {
+      "enum": [
+        "schema_invalid",
+        "llm_unavailable",
+        "evidence_integrity_error",
+        "budget_exceeded",
+        "deadline_exceeded",
+        "agent_restarted",
+        "unknown_finding_reference",
+        "task_lost",
+        "task_rejected",
+        "investigation_deadline",
+        "stale_attempt",
+        "already_committed",
+        "investigation_cancelled",
+        "replay_objective_locked",
+        "content_conflict",
+        "replay_miss",
+        "analysis_policy_unmet"
+      ],
+      "title": "ErrorCode",
+      "type": "string"
+    },
+    "ProposedEdge": {
+      "additionalProperties": false,
+      "description": "``(source)-[:type]->(target)``. Shape is not in the spec (only the edge types are).",
+      "properties": {
+        "source_finding_id": {
+          "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+          "title": "Source Finding Id",
+          "type": "string"
+        },
+        "target_finding_id": {
+          "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+          "title": "Target Finding Id",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/EdgeType"
+        }
+      },
+      "required": [
+        "type",
+        "source_finding_id",
+        "target_finding_id"
+      ],
+      "title": "ProposedEdge",
+      "type": "object"
+    },
+    "RejectedEdge": {
+      "additionalProperties": false,
+      "description": "An edge the Context Service refused. A missing, foreign or above-clearance finding all\nreport ``unknown_finding_reference`` so existence is not leaked (\u00a79.5 404-not-403 rule).",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "edge": {
+          "$ref": "#/$defs/ProposedEdge"
+        }
+      },
+      "required": [
+        "edge",
+        "code"
+      ],
+      "title": "RejectedEdge",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Same key + same hash \u2192 original ``assessment_id``; different hash \u2192 ``409\nalready_committed`` (ProblemDetails with ``assessment_id``) (\u00a78.5).",
+  "properties": {
+    "accepted_edges": {
+      "items": {
+        "$ref": "#/$defs/ProposedEdge"
+      },
+      "title": "Accepted Edges",
+      "type": "array"
+    },
+    "assessment_id": {
+      "pattern": "^asm_[A-Za-z0-9_-]{1,64}$",
+      "title": "Assessment Id",
+      "type": "string"
+    },
+    "rejected_edges": {
+      "items": {
+        "$ref": "#/$defs/RejectedEdge"
+      },
+      "title": "Rejected Edges",
+      "type": "array"
+    }
+  },
+  "required": [
+    "assessment_id"
+  ],
+  "title": "AssessmentSubmissionResponse",
+  "type": "object"
+}

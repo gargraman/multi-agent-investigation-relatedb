@@ -1,0 +1,332 @@
+{
+  "$defs": {
+    "AgentId": {
+      "description": "Stable agent identifiers (spec \u00a712.2 example: ``sigint-agent``).",
+      "enum": [
+        "sigint-agent",
+        "geoint-agent",
+        "analysis-agent"
+      ],
+      "title": "AgentId",
+      "type": "string"
+    },
+    "Classification": {
+      "description": "Fictional demo classification levels (spec \u00a79.3).",
+      "enum": [
+        "DEMO-LOW",
+        "DEMO-MID",
+        "DEMO-HIGH"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "ConfidenceBand": {
+      "description": "Mandatory confidence band (spec \u00a79.2). Bands are documented, not calibrated.",
+      "enum": [
+        "LOW",
+        "MODERATE",
+        "HIGH"
+      ],
+      "title": "ConfidenceBand",
+      "type": "string"
+    },
+    "EvidenceRefSubmission": {
+      "additionalProperties": false,
+      "description": "Evidence reference sent with a finding: id, hash, owner, short summary (\u00a711.3 step 5).\nNever raw content (\u00a79.1).",
+      "properties": {
+        "evidence_id": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "owner_node_id": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "sha256",
+        "owner_node_id",
+        "summary"
+      ],
+      "title": "EvidenceRefSubmission",
+      "type": "object"
+    },
+    "FindingDraft": {
+      "additionalProperties": false,
+      "description": "One finding as submitted by an agent (\u00a79.2 agent-supplied fields + ADR-007 assertions).\n\n``statement`` is an addition: \u00a79.2 lists provenance fields only and names no field for the\nfinding's own content.",
+      "properties": {
+        "about": {
+          "description": "ABOUT entity manifest ids.",
+          "items": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "About",
+          "type": "array"
+        },
+        "assertions": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "LINKED_TO": "#/$defs/LinkedToAssertion",
+                "PLACED_AT": "#/$defs/PlacedAtAssertion"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/LinkedToAssertion"
+              },
+              {
+                "$ref": "#/$defs/PlacedAtAssertion"
+              }
+            ]
+          },
+          "title": "Assertions",
+          "type": "array"
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "confidence_band": {
+          "$ref": "#/$defs/ConfidenceBand"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceRefSubmission"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/FindingKind"
+        },
+        "model_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model Id",
+          "type": "string"
+        },
+        "prompt_version": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "reasoning_summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Reasoning Summary",
+          "type": "string"
+        },
+        "schema_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "statement": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "synthetic": {
+          "const": true,
+          "default": true,
+          "title": "Synthetic",
+          "type": "boolean"
+        },
+        "valid_from": {
+          "format": "date-time",
+          "title": "Valid From",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        }
+      },
+      "required": [
+        "valid_from",
+        "valid_until",
+        "kind",
+        "statement",
+        "confidence",
+        "confidence_band",
+        "classification",
+        "about",
+        "evidence",
+        "reasoning_summary",
+        "model_id",
+        "prompt_version",
+        "schema_version"
+      ],
+      "title": "FindingDraft",
+      "type": "object"
+    },
+    "FindingKind": {
+      "description": "Finding kind (spec \u00a79.1, \u00a79.2): P0 folds \"Observation\" into Finding.",
+      "enum": [
+        "OBSERVATION",
+        "INFERENCE"
+      ],
+      "title": "FindingKind",
+      "type": "string"
+    },
+    "LinkType": {
+      "description": "``LINKED_TO.link_type`` (\u00a79.3). Only ``CONTACT`` is specified; it is symmetric (G3).",
+      "enum": [
+        "CONTACT"
+      ],
+      "title": "LinkType",
+      "type": "string"
+    },
+    "LinkedToAssertion": {
+      "additionalProperties": false,
+      "description": "Entity \u2194 entity link in a window (SIGINT; \u00a79.3, ADR-007 \u00a71).",
+      "properties": {
+        "link_type": {
+          "$ref": "#/$defs/LinkType"
+        },
+        "object": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "subject": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Subject",
+          "type": "string"
+        },
+        "type": {
+          "const": "LINKED_TO",
+          "default": "LINKED_TO",
+          "title": "Type",
+          "type": "string"
+        },
+        "valid_from": {
+          "format": "date-time",
+          "title": "Valid From",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        }
+      },
+      "required": [
+        "valid_from",
+        "valid_until",
+        "subject",
+        "object",
+        "link_type"
+      ],
+      "title": "LinkedToAssertion",
+      "type": "object"
+    },
+    "PlacedAtAssertion": {
+      "additionalProperties": false,
+      "description": "Entity at a LOCATION grid cell in a window (GEOINT; \u00a79.3, ADR-007 \u00a71).",
+      "properties": {
+        "location": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Location",
+          "type": "string"
+        },
+        "subject": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Subject",
+          "type": "string"
+        },
+        "type": {
+          "const": "PLACED_AT",
+          "default": "PLACED_AT",
+          "title": "Type",
+          "type": "string"
+        },
+        "valid_from": {
+          "format": "date-time",
+          "title": "Valid From",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        }
+      },
+      "required": [
+        "valid_from",
+        "valid_until",
+        "subject",
+        "location"
+      ],
+      "title": "PlacedAtAssertion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``POST /v1/findings:batch`` body. Idempotency key = ``task_id`` (\u00a78.5).",
+  "properties": {
+    "attempt": {
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/FindingDraft"
+      },
+      "minItems": 1,
+      "title": "Findings",
+      "type": "array"
+    },
+    "investigation_id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Investigation Id",
+      "type": "string"
+    },
+    "task_id": {
+      "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "investigation_id",
+    "attempt",
+    "findings"
+  ],
+  "title": "FindingBatchRequest",
+  "type": "object"
+}

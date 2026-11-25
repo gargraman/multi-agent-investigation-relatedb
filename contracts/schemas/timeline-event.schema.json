@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "TimelineEventType": {
+      "enum": [
+        "investigation.status_changed",
+        "task.status_changed",
+        "task.late_result",
+        "transition.dropped",
+        "llm.replayed"
+      ],
+      "title": "TimelineEventType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Envelope. For typed event types the payload must validate against its model.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "investigation_id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Investigation Id",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "seq": {
+      "minimum": 1,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "type": {
+      "$ref": "#/$defs/TimelineEventType"
+    }
+  },
+  "required": [
+    "seq",
+    "investigation_id",
+    "type",
+    "created_at"
+  ],
+  "title": "TimelineEvent",
+  "type": "object"
+}

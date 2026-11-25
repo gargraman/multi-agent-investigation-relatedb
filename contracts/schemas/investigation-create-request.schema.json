@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "objective": {
+      "anyOf": [
+        {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Objective"
+    },
+    "scenario_id": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Scenario Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scenario_id"
+  ],
+  "title": "InvestigationCreateRequest",
+  "type": "object"
+}

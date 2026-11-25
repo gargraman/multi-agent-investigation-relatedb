@@ -1,0 +1,26 @@
+{
+  "classification": "DEMO-LOW",
+  "collector": "relay-tap-north",
+  "evidence_id": "ev-sig-006",
+  "records": [
+    {
+      "channel": "TEXT",
+      "duration_s": 1,
+      "from_handle": "osprey-9@relay.example.invalid",
+      "record_id": "ev-sig-006-r01",
+      "start": "2026-10-19T18:10:00Z",
+      "to_handle": "kestrel-7@relay.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 240,
+      "from_handle": "kestrel-7@relay.example.invalid",
+      "record_id": "ev-sig-006-r02",
+      "start": "2026-10-20T08:45:00Z",
+      "to_handle": "osprey-9@relay.example.invalid"
+    }
+  ],
+  "schema": "nexus.fixture.sigint.comms/1",
+  "summary": "Synthetic comms metadata: contacts between two fictional handles around the disputed window.",
+  "synthetic": true
+}

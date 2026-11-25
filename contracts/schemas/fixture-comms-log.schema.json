@@ -1,0 +1,115 @@
+{
+  "$defs": {
+    "Classification": {
+      "description": "Fictional demo classification levels (spec \u00a79.3).",
+      "enum": [
+        "DEMO-LOW",
+        "DEMO-MID",
+        "DEMO-HIGH"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "CommsRecord": {
+      "additionalProperties": false,
+      "description": "One synthetic contact event between two handles. Window = [start, start + duration_s).",
+      "properties": {
+        "channel": {
+          "enum": [
+            "VOICE",
+            "TEXT",
+            "DATA"
+          ],
+          "title": "Channel",
+          "type": "string"
+        },
+        "duration_s": {
+          "exclusiveMinimum": 0,
+          "title": "Duration S",
+          "type": "integer"
+        },
+        "from_handle": {
+          "minLength": 1,
+          "title": "From Handle",
+          "type": "string"
+        },
+        "record_id": {
+          "title": "Record Id",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "to_handle": {
+          "minLength": 1,
+          "title": "To Handle",
+          "type": "string"
+        }
+      },
+      "required": [
+        "record_id",
+        "channel",
+        "from_handle",
+        "to_handle",
+        "start",
+        "duration_s"
+      ],
+      "title": "CommsRecord",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "SIGINT evidence fixture.",
+  "properties": {
+    "classification": {
+      "$ref": "#/$defs/Classification"
+    },
+    "collector": {
+      "minLength": 1,
+      "title": "Collector",
+      "type": "string"
+    },
+    "evidence_id": {
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "records": {
+      "items": {
+        "$ref": "#/$defs/CommsRecord"
+      },
+      "minItems": 1,
+      "title": "Records",
+      "type": "array"
+    },
+    "schema": {
+      "const": "nexus.fixture.sigint.comms/1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "summary": {
+      "description": "Short, shareable summary.",
+      "maxLength": 280,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    },
+    "synthetic": {
+      "const": true,
+      "title": "Synthetic",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "evidence_id",
+    "synthetic",
+    "classification",
+    "summary",
+    "schema",
+    "collector",
+    "records"
+  ],
+  "title": "CommsLog",
+  "type": "object"
+}

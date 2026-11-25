@@ -1,0 +1,26 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-011",
+  "observations": [
+    {
+      "observation_id": "ev-geo-011-o01",
+      "observed_from": "2026-10-16T13:00:00Z",
+      "observed_until": "2026-10-16T15:00:00Z",
+      "subject": "subject-delta",
+      "x": 431.2,
+      "y": 58.4
+    },
+    {
+      "observation_id": "ev-geo-011-o02",
+      "observed_from": "2026-10-16T13:30:00Z",
+      "observed_until": "2026-10-16T14:30:00Z",
+      "subject": "subject-echo",
+      "x": 468.0,
+      "y": 71.5
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "mast-03",
+  "summary": "Synthetic sightings: two fictional subjects in the same grid cell.",
+  "synthetic": true
+}

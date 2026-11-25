@@ -1,0 +1,58 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-001",
+  "observations": [
+    {
+      "observation_id": "ev-geo-001-o01",
+      "observed_from": "2026-10-18T14:50:00Z",
+      "observed_until": "2026-10-18T15:50:00Z",
+      "subject": "subject-alpha",
+      "x": 482.5,
+      "y": 41.1
+    },
+    {
+      "observation_id": "ev-geo-001-o02",
+      "observed_from": "2026-10-19T00:50:00Z",
+      "observed_until": "2026-10-19T01:10:00Z",
+      "subject": "unidentified-vehicle-VP",
+      "x": 570.6,
+      "y": 350.0
+    },
+    {
+      "observation_id": "ev-geo-001-o03",
+      "observed_from": "2026-10-19T16:10:00Z",
+      "observed_until": "2026-10-19T16:40:00Z",
+      "subject": "unidentified-vehicle-VP",
+      "x": 482.9,
+      "y": 357.2
+    },
+    {
+      "observation_id": "ev-geo-001-o04",
+      "observed_from": "2026-10-19T17:20:00Z",
+      "observed_until": "2026-10-19T17:40:00Z",
+      "subject": "unidentified-cyclist-CV",
+      "x": 82.0,
+      "y": 339.8
+    },
+    {
+      "observation_id": "ev-geo-001-o05",
+      "observed_from": "2026-10-22T00:00:00Z",
+      "observed_until": "2026-10-22T01:30:00Z",
+      "subject": "unidentified-vehicle-VP",
+      "x": 241.0,
+      "y": 135.1
+    },
+    {
+      "observation_id": "ev-geo-001-o06",
+      "observed_from": "2026-10-22T08:10:00Z",
+      "observed_until": "2026-10-22T09:40:00Z",
+      "subject": "unidentified-cyclist-CV",
+      "x": 188.7,
+      "y": 225.7
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "drone-relay-4",
+  "summary": "Synthetic sightings batch (6 observations).",
+  "synthetic": true
+}

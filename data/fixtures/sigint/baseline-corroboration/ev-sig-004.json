@@ -1,0 +1,42 @@
+{
+  "classification": "DEMO-MID",
+  "collector": "relay-tap-north",
+  "evidence_id": "ev-sig-004",
+  "records": [
+    {
+      "channel": "VOICE",
+      "duration_s": 180,
+      "from_handle": "kestrel-7@relay.example.invalid",
+      "record_id": "ev-sig-004-r01",
+      "start": "2026-10-12T07:15:00Z",
+      "to_handle": "marten-3@relay.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 210,
+      "from_handle": "marten-3@relay.example.invalid",
+      "record_id": "ev-sig-004-r02",
+      "start": "2026-10-13T07:20:00Z",
+      "to_handle": "kestrel-7@relay.example.invalid"
+    },
+    {
+      "channel": "TEXT",
+      "duration_s": 1,
+      "from_handle": "kestrel-7@relay.example.invalid",
+      "record_id": "ev-sig-004-r03",
+      "start": "2026-10-14T07:05:00Z",
+      "to_handle": "marten-3@relay.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 150,
+      "from_handle": "kestrel-7@relay.example.invalid",
+      "record_id": "ev-sig-004-r04",
+      "start": "2026-10-15T07:30:00Z",
+      "to_handle": "marten-3@relay.example.invalid"
+    }
+  ],
+  "schema": "nexus.fixture.sigint.comms/1",
+  "summary": "Synthetic comms metadata: repeated early-morning contacts between two fictional handles.",
+  "synthetic": true
+}

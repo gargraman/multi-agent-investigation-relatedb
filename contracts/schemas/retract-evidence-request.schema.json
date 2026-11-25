@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    }
+  },
+  "title": "RetractEvidenceRequest",
+  "type": "object"
+}

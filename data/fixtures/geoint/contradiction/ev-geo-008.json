@@ -1,0 +1,18 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-008",
+  "observations": [
+    {
+      "observation_id": "ev-geo-008-o01",
+      "observed_from": "2026-10-20T08:30:00Z",
+      "observed_until": "2026-10-20T09:30:00Z",
+      "subject": "subject-alpha",
+      "x": 347.9,
+      "y": 356.6
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "drone-relay-4",
+  "summary": "Synthetic sighting: the same fictional subject in a southern grid cell.",
+  "synthetic": true
+}

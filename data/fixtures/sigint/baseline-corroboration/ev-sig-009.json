@@ -1,0 +1,26 @@
+{
+  "classification": "DEMO-LOW",
+  "collector": "mesh-tap-east",
+  "evidence_id": "ev-sig-009",
+  "records": [
+    {
+      "channel": "TEXT",
+      "duration_s": 1,
+      "from_handle": "heron-5@mesh.example.invalid",
+      "record_id": "ev-sig-009-r01",
+      "start": "2026-10-15T20:00:00Z",
+      "to_handle": "lynx-2@mesh.example.invalid"
+    },
+    {
+      "channel": "DATA",
+      "duration_s": 90,
+      "from_handle": "lynx-2@mesh.example.invalid",
+      "record_id": "ev-sig-009-r02",
+      "start": "2026-10-16T13:40:00Z",
+      "to_handle": "heron-5@mesh.example.invalid"
+    }
+  ],
+  "schema": "nexus.fixture.sigint.comms/1",
+  "summary": "Synthetic comms metadata: short data exchanges between two fictional mesh handles.",
+  "synthetic": true
+}

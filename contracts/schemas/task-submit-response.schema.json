@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "description": "``202`` body of ``POST /v1/tasks``: ``{task_id, status}`` (\u00a712.2).",
+  "properties": {
+    "status": {
+      "enum": [
+        "SUBMITTED",
+        "REJECTED"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "task_id": {
+      "pattern": "^tsk_[A-Za-z0-9_-]{1,64}$",
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "status"
+  ],
+  "title": "TaskSubmitResponse",
+  "type": "object"
+}

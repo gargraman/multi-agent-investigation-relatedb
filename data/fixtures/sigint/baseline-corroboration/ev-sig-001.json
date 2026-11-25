@@ -1,0 +1,34 @@
+{
+  "classification": "DEMO-LOW",
+  "collector": "relay-tap-north",
+  "evidence_id": "ev-sig-001",
+  "records": [
+    {
+      "channel": "TEXT",
+      "duration_s": 1,
+      "from_handle": "less-18@relay.example.invalid",
+      "record_id": "ev-sig-001-r01",
+      "start": "2026-10-11T21:54:00Z",
+      "to_handle": "practice-33@mesh.example.invalid"
+    },
+    {
+      "channel": "DATA",
+      "duration_s": 286,
+      "from_handle": "practice-33@mesh.example.invalid",
+      "record_id": "ev-sig-001-r02",
+      "start": "2026-10-15T08:58:00Z",
+      "to_handle": "kestrel-alt@mesh.example.invalid"
+    },
+    {
+      "channel": "VOICE",
+      "duration_s": 190,
+      "from_handle": "kestrel-alt@mesh.example.invalid",
+      "record_id": "ev-sig-001-r03",
+      "start": "2026-10-17T04:54:00Z",
+      "to_handle": "this-32@mesh.example.invalid"
+    }
+  ],
+  "schema": "nexus.fixture.sigint.comms/1",
+  "summary": "Synthetic comms metadata batch (3 records).",
+  "synthetic": true
+}

@@ -1,0 +1,42 @@
+{
+  "classification": "DEMO-LOW",
+  "evidence_id": "ev-geo-009",
+  "observations": [
+    {
+      "observation_id": "ev-geo-009-o01",
+      "observed_from": "2026-10-10T08:30:00Z",
+      "observed_until": "2026-10-10T08:50:00Z",
+      "subject": "unidentified-vehicle-TL",
+      "x": 411.2,
+      "y": 336.3
+    },
+    {
+      "observation_id": "ev-geo-009-o02",
+      "observed_from": "2026-10-14T05:50:00Z",
+      "observed_until": "2026-10-14T06:20:00Z",
+      "subject": "subject-alpha",
+      "x": 549.6,
+      "y": 16.3
+    },
+    {
+      "observation_id": "ev-geo-009-o03",
+      "observed_from": "2026-10-14T10:50:00Z",
+      "observed_until": "2026-10-14T11:50:00Z",
+      "subject": "vehicle-grey-van",
+      "x": 26.9,
+      "y": 385.0
+    },
+    {
+      "observation_id": "ev-geo-009-o04",
+      "observed_from": "2026-10-14T18:00:00Z",
+      "observed_until": "2026-10-14T19:30:00Z",
+      "subject": "subject-foxtrot",
+      "x": 558.3,
+      "y": 77.5
+    }
+  ],
+  "schema": "nexus.fixture.geoint.sightings/1",
+  "sensor": "mast-north-11",
+  "summary": "Synthetic sightings batch (4 observations).",
+  "synthetic": true
+}

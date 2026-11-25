@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "AgentId": {
+      "description": "Stable agent identifiers (spec \u00a712.2 example: ``sigint-agent``).",
+      "enum": [
+        "sigint-agent",
+        "geoint-agent",
+        "analysis-agent"
+      ],
+      "title": "AgentId",
+      "type": "string"
+    },
+    "Classification": {
+      "description": "Fictional demo classification levels (spec \u00a79.3).",
+      "enum": [
+        "DEMO-LOW",
+        "DEMO-MID",
+        "DEMO-HIGH"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "LlmMode": {
+      "description": "LLM provider mode (spec \u00a713.2/\u00a713.3, ADR-006 E3). Wire values are lower-case.",
+      "enum": [
+        "live",
+        "replay"
+      ],
+      "title": "LlmMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Minimal agent card at ``/.well-known/agent-card.json`` (\u00a712.2, ADR-004 C3; ``llm_mode``\nper ADR-006 E3). Not the A2A card shape (ADR-004 C4 parked).",
+  "properties": {
+    "clearance": {
+      "$ref": "#/$defs/Classification"
+    },
+    "id": {
+      "$ref": "#/$defs/AgentId"
+    },
+    "llm_mode": {
+      "$ref": "#/$defs/LlmMode"
+    },
+    "role": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Role",
+      "type": "string"
+    },
+    "task_types": {
+      "items": {
+        "pattern": "^[a-z][a-z0-9_]{0,63}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Task Types",
+      "type": "array"
+    },
+    "version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "role",
+    "task_types",
+    "version",
+    "clearance",
+    "llm_mode"
+  ],
+  "title": "AgentCard",
+  "type": "object"
+}
