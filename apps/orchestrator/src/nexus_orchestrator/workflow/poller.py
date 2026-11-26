@@ -5,12 +5,15 @@ rows, so a restart (resume sweep) just starts a new driver.
 
 Each tick, only while this process **holds the leader lock** (ADR-005 D1):
 
-1. On the driver's first leader tick, dispatch every PENDING task (same ``attempt``; the agent's
+1. Time out every PENDING/DISPATCHED/RUNNING task past its deadline (FR-120, ``deadlines.py``):
+   → TIMED_OUT (version guarded), then a best-effort agent cancel for DISPATCHED/RUNNING ones.
+2. On the driver's first leader tick, dispatch every PENDING task (same ``attempt``; the agent's
    ``(task_id, attempt)`` dedup makes a resume re-POST safe, ADR-008 F2).
-2. Poll every DISPATCHED/RUNNING task through the uninstrumented client and map the result with
+3. Poll every DISPATCHED/RUNNING task through the uninstrumented client and map the result with
    ``status_mapping`` (the only agent↔orchestrator crossing, §8.2). A poll that changes nothing
-   writes nothing: no event and no span per poll (F9).
-3. When every task row is terminal, apply the S2 terminal rule (``workflow/terminal.py``) and
+   writes nothing: no event and no span per poll (F9). An agent ``FAILED(deadline_exceeded)`` at
+   attempt 1 is recorded as TIMED_OUT, the same as an orchestrator timeout (FR-121b).
+4. When every task row is terminal, apply the S2 terminal rule (``workflow/terminal.py``) and
    exit.
 
 Then sleep ``poll_interval_seconds`` ± ``poll_jitter_ratio`` (2 s ± 20 %).
@@ -41,7 +44,7 @@ from nexus_contracts.a2a.status_mapping import (
     map_task_result,
 )
 from nexus_contracts.a2a.task import TaskResult
-from nexus_contracts.api.errors import CATEGORY_BY_CODE
+from nexus_contracts.api.errors import CATEGORY_BY_CODE, ErrorCode
 from nexus_contracts.api.states import InvestigationStatus, OrchestratorTaskState
 from nexus_contracts.common import AgentId
 from nexus_contracts.events.timeline import TimelineEventType
@@ -52,7 +55,7 @@ from nexus_orchestrator.scenarios import ScenarioCatalog
 from nexus_orchestrator.settings import OrchestratorSettings
 from nexus_orchestrator.state.db import Database
 from nexus_orchestrator.state.repository import Applied, Repository, TaskRecord
-from nexus_orchestrator.workflow import terminal
+from nexus_orchestrator.workflow import deadlines, terminal
 from nexus_orchestrator.workflow.dispatch import Dispatcher, stored_carrier
 
 log = logging.getLogger(__name__)
@@ -156,6 +159,12 @@ class Poller:
                                 extra={"investigation_id": investigation_id},
                             )
                     tasks = await self.repo.task_records(investigation_id)
+                    # Tick order: (1) investigation deadline [S3b-8], (2) task deadlines,
+                    # (3) re-dispatch [S3b-7], then dispatch, poll, finish.
+                    due = deadlines.expired(tasks, self.clock.now())
+                    if due:
+                        await asyncio.gather(*(self._time_out(t) for t in due))
+                        tasks = await self.repo.task_records(investigation_id)
                     if not dispatched and manifest is not None:
                         pending = [t for t in tasks if t.status is OrchestratorTaskState.PENDING]
                         await asyncio.gather(
@@ -190,15 +199,47 @@ class Poller:
             log.warning("agent lost an acknowledged task", extra={"task_id": task.id})
         await self._record(task, update, result, trace_context_json)
 
+    async def _time_out(self, task: TaskRecord) -> None:
+        """FR-120: ``task`` is past its deadline → TIMED_OUT(deadline_exceeded), version guarded.
+
+        The agent is told to stop only **after** the commit and only if this write was the one
+        that applied: a task that finished first (DROPPED/NOOP) is not cancelled. The cancel is
+        best effort (FR-102) and never fails the tick."""
+        trace_context_json = await self.repo.get_trace_context(task.investigation_id)
+        attrs = {
+            "nexus.investigation.id": task.investigation_id,
+            "nexus.task.id": task.id,
+            "nexus.task.attempt": task.attempt,
+            "nexus.agent.id": task.agent_id.value,
+            "nexus.task.from": task.status.value,
+        }
+        parent = propagate.extract(stored_carrier(trace_context_json))
+        with self.tracer.start_as_current_span(
+            "workflow.timeout", context=parent, attributes=attrs
+        ):
+            update = TaskStateUpdate(OrchestratorTaskState.TIMED_OUT, ErrorCode.DEADLINE_EXCEEDED)
+            applied = await self._record(task, update, None, trace_context_json)
+            if applied is Applied.APPLIED and task.status in POLLED_STATES:
+                try:
+                    await self.agents.cancel(task.agent_id, task.id)
+                except Exception:
+                    log.warning("agent cancel failed", extra={"task_id": task.id}, exc_info=True)
+
     async def _record(
         self,
         task: TaskRecord,
         update: TaskStateUpdate,
         result: TaskResult | None,
         trace_context_json: str | None,
-    ) -> None:
+    ) -> Applied:
         assert update.state is not None
         to = update.state
+        if (
+            to is OrchestratorTaskState.FAILED
+            and update.reason is ErrorCode.DEADLINE_EXCEEDED
+            and task.attempt == 1
+        ):
+            to = OrchestratorTaskState.TIMED_OUT  # FR-121b: an agent-reported timeout is a timeout
         fields: dict[str, object] = {}
         if result is not None:
             fields["llm_mode"] = result.llm_mode.value
@@ -225,7 +266,7 @@ class Poller:
                     tx, task, to, now=now, reason=update.reason, fields=fields
                 )
                 if applied is not Applied.APPLIED or not to.is_terminal or result is None:
-                    return
+                    return applied
                 usage = result.usage
                 if usage is not None:
                     await self.repo.add_tokens_used(
@@ -243,6 +284,7 @@ class Poller:
                             },
                             now,
                         )
+        return applied
 
     async def _maybe_finish(self, investigation_id: str, manifest: ScenarioManifest | None) -> bool:
         """Apply the terminal rule if every task is terminal. True when the driver can exit."""

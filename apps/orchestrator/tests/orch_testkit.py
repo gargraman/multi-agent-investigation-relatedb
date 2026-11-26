@@ -167,6 +167,8 @@ class FakeAgent:
       for a byte-identical duplicate (S2 G2); 409 ``content_conflict`` if the body differs.
     - ``GET /v1/tasks/{id}``: walks ``script`` one step per poll (``hold`` freezes it);
       404 for unknown ids (``forget()`` simulates an agent that lost its state).
+    - ``POST /v1/tasks/{id}/cancel``: records the id in ``cancels``; the scripted status is left
+      alone (the orchestrator has already moved on, which is what the tests look at).
     - ``up = False`` makes every request a connect error; ``lose_response = True`` lets the
       agent process the request, then drops the reply (a read error), as after a network cut.
     """
@@ -191,6 +193,7 @@ class FakeAgent:
         self.tasks: dict[str, dict] = {}
         self.submits: list[tuple[int, TaskRequest, httpx.Headers]] = []
         self.polls: list[str] = []
+        self.cancels: list[str] = []  # task ids of every ``POST /v1/tasks/{id}/cancel``
         self.card_reads = 0
         self.app = self._build()
 
@@ -301,6 +304,15 @@ class FakeAgent:
             elif not fake.hold and task["step"] < len(fake.script):
                 task["step"] += 1
             return JSONResponse(fake._result(task_id, task).model_dump(mode="json"))
+
+        @app.post("/v1/tasks/{task_id}/cancel")
+        async def cancel(task_id: str, request: Request) -> JSONResponse:
+            if request.headers.get("authorization") != f"Bearer {TOKEN}":
+                return JSONResponse({"title": "Unauthorized", "status": 401}, status_code=401)
+            fake.cancels.append(task_id)
+            if task_id not in fake.tasks:
+                return JSONResponse({"title": "Not Found", "status": 404}, status_code=404)
+            return JSONResponse({"task_id": task_id, "status": S.CANCELED.value})
 
         return app
 
