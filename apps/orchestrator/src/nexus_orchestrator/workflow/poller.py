@@ -152,6 +152,17 @@ class Poller:
     def active(self) -> set[str]:
         return {i for i, t in self._drivers.items() if not t.done()}
 
+    async def stop_one(self, investigation_id: str) -> None:
+        """Cancel and await one investigation's driver (cancel endpoint, FR-125). A no-op when
+        there is none, and when called from inside that driver's own task (it is already on its
+        way out, and awaiting itself would never return)."""
+        task = self._drivers.get(investigation_id)
+        if task is None or task is asyncio.current_task():
+            return
+        del self._drivers[investigation_id]
+        task.cancel()
+        await asyncio.wait({task})  # unlike ``await task``: never re-raises the driver's outcome
+
     async def stop(self) -> None:
         """Graceful shutdown (ADR-005 D5): cancel drivers, change no state."""
         self._stopped = True

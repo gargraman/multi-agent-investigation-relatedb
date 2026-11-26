@@ -64,4 +64,7 @@ testpaths = [
 # importlib mode: several members have identically named test modules (test_import.py).
 addopts = ["--import-mode=importlib", "-ra", "--strict-markers"]
 asyncio_mode = "auto"
+markers = [
+    "slow: real-time test (wall-clock assertion); still part of the default run",
+]
 asyncio_default_fixture_loop_scope = "function"

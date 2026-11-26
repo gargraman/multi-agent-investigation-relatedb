@@ -123,6 +123,7 @@ def create_app(
         registry,
         poller,
         fence,
+        tracer,
     )
 
     @asynccontextmanager

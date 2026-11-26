@@ -25,10 +25,12 @@ from nexus_contracts.api.context import InvestigationContext
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.investigations import (
     Investigation,
+    InvestigationCancelResponse,
     InvestigationCreateRequest,
     InvestigationPage,
 )
 from nexus_contracts.api.problem import FieldError, ProblemDetails
+from nexus_contracts.api.states import InvestigationStatus
 from nexus_contracts.common import InvestigationId, LlmMode
 from nexus_contracts.events.timeline import TimelineEvent, TimelinePage
 from nexus_orchestrator.api.problems import ProblemError, problem_response, schema_invalid
@@ -126,6 +128,46 @@ async def get_investigation(investigation_id: InvestigationId, rt: RuntimeDep) -
     if investigation is None:
         raise ProblemError(404, f"investigation {investigation_id} not found")
     return investigation
+
+
+def _terminal(status: InvestigationStatus) -> ProblemError:
+    return ProblemError(
+        409,
+        f"investigation is {status.value}",
+        code=ErrorCode.INVESTIGATION_TERMINAL.value,
+        title="Investigation already ended",
+    )
+
+
+@api.post(
+    "/investigations/{investigation_id}/cancel",
+    response_model=InvestigationCancelResponse,
+    responses={404: PROBLEM, 409: PROBLEM},
+)
+async def cancel_investigation(
+    investigation_id: InvestigationId, rt: RuntimeDep
+) -> InvestigationCancelResponse:
+    """FR-125: fence-first cancel from CREATED, RUNNING or ANALYZING, all within the request
+    (``Fence.end``: investigation row, Context Service close, agent cancels, tasks). The status
+    is checked first so a refused cancel writes nothing, not even a ``transition.dropped`` note;
+    losing a race to another ender shows up as ``applied=False`` and is the same 409."""
+    record = await rt.repo.investigation_record(investigation_id)
+    if record is None:
+        raise ProblemError(404, f"investigation {investigation_id} not found")
+    if record.status.is_terminal:
+        raise _terminal(record.status)
+    with rt.tracer.start_as_current_span(
+        "workflow.cancel", attributes={"nexus.investigation.id": investigation_id}
+    ):
+        result = await rt.fence.end(
+            investigation_id, InvestigationStatus.CANCELLED, None, task_reason=None
+        )
+    if not result.applied:
+        raise _terminal(result.status)
+    await rt.poller.stop_one(investigation_id)
+    return InvestigationCancelResponse(
+        id=investigation_id, status=result.status, context_closed=result.context_closed
+    )
 
 
 @api.get(

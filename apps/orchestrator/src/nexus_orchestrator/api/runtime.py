@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import Request
+from opentelemetry.trace import Tracer
 
 from nexus_orchestrator.delegation.agent_client import AgentClient
 from nexus_orchestrator.delegation.agent_registry import AgentRegistry
@@ -34,6 +35,7 @@ class Runtime:
     registry: AgentRegistry
     poller: Poller
     fence: Fence
+    tracer: Tracer
     sweep_done: bool = False
     shutting_down: bool = False
 
