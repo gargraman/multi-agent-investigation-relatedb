@@ -21,6 +21,7 @@ from orch_testkit import (
     S,
     create,
     parked,
+    pump,
     running,
     runtime,
     task_in,
@@ -274,6 +275,43 @@ async def test_ensure_resumed_is_a_noop_for_a_running_driver(make_app) -> None:
         before = poller._drivers[inv_id]
         poller.ensure(inv_id, resumed=True)
         assert poller._drivers[inv_id] is before
+
+
+async def test_resume_poll_failure_keeps_poll_first_for_the_retry(make_app, monkeypatch) -> None:
+    """The poll on the first resumed tick raises: the retry must still be poll-first, so the
+    result the agent finished during the outage is kept instead of timed out."""
+    start = utcnow()
+    agent = FakeAgent()
+    agent.hold = True
+    agent.ready = False  # a timed-out task stays TIMED_OUT (no attempt 2) so it can be seen
+    inv_id, task_id = await seed_dispatched(make_app, agent, start)
+    agent.tasks[task_id]["status"] = S.COMPLETED
+
+    app, clock = resumed_app(make_app, agent, start, 200)  # task deadline is past
+    poller = runtime(app).poller
+    real_poll = poller._poll_one
+    calls: list[str] = []
+
+    async def flaky_poll(task, trace_context_json) -> None:
+        calls.append(task.id)
+        if len(calls) == 1:
+            raise RuntimeError("poll failed (test double)")
+        await real_poll(task, trace_context_json)
+
+    monkeypatch.setattr(poller, "_poll_one", flaky_poll)
+    async with running(app):
+
+        async def failed_once() -> bool:
+            return len(calls) == 1
+
+        await wait_until(failed_once)
+        await parked(clock)
+        assert (await the_task(app, inv_id)).status is T.DISPATCHED  # that tick timed nothing out
+        await pump(clock, task_in(app, inv_id, T.COMPLETED, T.TIMED_OUT))
+        task = await the_task(app, inv_id)
+
+    assert task.status is T.COMPLETED
+    assert agent.cancels == []
 
 
 @pytest.mark.parametrize("outage", [0, 5])

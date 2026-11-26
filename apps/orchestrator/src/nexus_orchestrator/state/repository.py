@@ -120,6 +120,7 @@ class InvestigationRecord:
     trace_context_json: str | None
     version: int
     context_closed: bool = False  # the Context Service accepted the close (FR-125, FR-123)
+    tokens_used: int = 0  # cumulative input + output over every terminal task write (all attempts)
 
     @classmethod
     def from_row(cls, row: aiosqlite.Row) -> InvestigationRecord:
@@ -132,6 +133,7 @@ class InvestigationRecord:
             trace_context_json=row["trace_context_json"],
             version=row["version"],
             context_closed=bool(row["context_closed"]),
+            tokens_used=row["tokens_used"],
         )
 
 

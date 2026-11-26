@@ -201,8 +201,6 @@ class Poller:
                     # were down is kept, and only a task with no terminal answer is timed out.
                     polled_first = False
                     if poll_first:
-                        poll_first = False
-                        polled_first = True
                         if manifest is not None and self.clock.now() < inv.deadline:
                             # Past the investigation deadline nothing is re-POSTed (FR-123).
                             dispatched = await self._dispatch_pending(
@@ -210,6 +208,10 @@ class Poller:
                             )
                         await self._poll_open(inv, investigation_id)
                         tasks = await self.repo.task_records(investigation_id)
+                        # Cleared only once the poll and the re-read have succeeded: if any of
+                        # them raised, the retry is still poll-first (FR-127).
+                        poll_first = False
+                        polled_first = True
                     if self.clock.now() >= inv.deadline:
                         await self._deadline(inv, tasks)
                         return  # ended, or someone else already ended it: either way we are done
@@ -319,7 +321,10 @@ class Poller:
         """FR-128: after a COMPLETED task, is what is left under the analysis minimum? Analysis is
         not enabled in S3, so this is only logged; S4 turns it into ``PARTIAL(budget_exceeded)``."""
         cap = self.settings.nexus_max_tokens_per_investigation
-        used = budget.tokens_used(await self.repo.task_records(investigation_id))
+        record = await self.repo.investigation_record(investigation_id)
+        if record is None:
+            return
+        used = record.tokens_used  # the cumulative ledger: every attempt's spend, not the last's
         if budget.analysis_budget_short(cap, used, self.settings.min_analysis_tokens):
             log.info(
                 "analysis budget short",
