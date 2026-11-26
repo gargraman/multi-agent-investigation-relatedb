@@ -15,6 +15,7 @@ import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -34,6 +35,7 @@ from nexus_contracts.a2a.task import (
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.common import AgentId, Classification, LlmMode
 from nexus_orchestrator.api.runtime import Runtime
+from nexus_orchestrator.clock import Clock
 from nexus_orchestrator.ids import utcnow
 from nexus_orchestrator.main import create_app
 from nexus_orchestrator.settings import OrchestratorSettings
@@ -44,6 +46,24 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCENARIOS_DIR = REPO_ROOT / "data" / "scenarios"
 TOKEN = "orchestrator-test-token-" + "x" * 16
 SCENARIO = "baseline-corroboration"
+
+
+class FakeClock:
+    """Virtual time for the orchestrator's :class:`Clock`. ``sleep`` advances time instead of
+    waiting, then yields once so other tasks run; ``advance`` moves it from the test."""
+
+    def __init__(self, start: datetime) -> None:
+        self._now = start
+
+    def now(self) -> datetime:
+        return self._now
+
+    async def sleep(self, seconds: float) -> None:
+        self.advance(seconds)
+        await asyncio.sleep(0)
+
+    def advance(self, seconds: float) -> None:
+        self._now += timedelta(seconds=seconds)
 
 
 class FakeContextService:
@@ -311,7 +331,11 @@ def exporter() -> InMemorySpanExporter:
 @pytest.fixture
 def make_app(make_settings, exporter):
     def _make(
-        fake: FakeContextService, agent: FakeAgent | None = None, **overrides: object
+        fake: FakeContextService,
+        agent: FakeAgent | None = None,
+        *,
+        clock: Clock | None = None,
+        **overrides: object,
     ) -> FastAPI:
         """``agent`` defaults to a SIGINT double that never finishes (held at SUBMITTED), so
         S1-style tests see a stable RUNNING investigation."""
@@ -321,7 +345,11 @@ def make_app(make_settings, exporter):
             agent = FakeAgent()
             agent.hold = True
         return create_app(
-            settings, fake.transport, agent_transport=agent.transport, tracer_provider=provider
+            settings,
+            fake.transport,
+            agent_transport=agent.transport,
+            tracer_provider=provider,
+            clock=clock,
         )
 
     return _make

@@ -46,8 +46,8 @@ from nexus_contracts.api.states import InvestigationStatus, OrchestratorTaskStat
 from nexus_contracts.common import AgentId
 from nexus_contracts.events.timeline import TimelineEventType
 from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_orchestrator.clock import Clock, SystemClock
 from nexus_orchestrator.delegation.agent_client import AgentClient
-from nexus_orchestrator.ids import utcnow
 from nexus_orchestrator.scenarios import ScenarioCatalog
 from nexus_orchestrator.settings import OrchestratorSettings
 from nexus_orchestrator.state.db import Database
@@ -79,7 +79,9 @@ class Poller:
         dispatcher: Dispatcher,
         tracer: Tracer,
         is_leader: Callable[[], bool],
+        clock: Clock | None = None,
     ) -> None:
+        self.clock: Clock = clock or SystemClock()
         self.settings = settings
         self.db = db
         self.repo = repo
@@ -160,7 +162,7 @@ class Poller:
                 raise
             except Exception:
                 log.exception("driver tick failed", extra={"investigation_id": investigation_id})
-            await asyncio.sleep(self._sleep_seconds())
+            await self.clock.sleep(self._sleep_seconds())
 
     async def _poll_one(self, task: TaskRecord, trace_context_json: str | None) -> None:
         self.polls += 1
@@ -206,7 +208,7 @@ class Poller:
         }
         parent = propagate.extract(stored_carrier(trace_context_json))
         with self.tracer.start_as_current_span("task.transition", context=parent, attributes=attrs):
-            now = utcnow()
+            now = self.clock.now()
             async with self.db.transaction() as tx:
                 applied = await self.repo.transition_task(
                     tx, task, to, now=now, reason=update.reason, fields=fields
@@ -259,7 +261,11 @@ class Poller:
                 },
             ):
                 await self.repo.transition_investigation(
-                    tx, investigation_id, decision.status, now=utcnow(), reason=decision.reason
+                    tx,
+                    investigation_id,
+                    decision.status,
+                    now=self.clock.now(),
+                    reason=decision.reason,
                 )
         log.info(
             "investigation finished",

@@ -32,6 +32,8 @@ from nexus_orchestrator.ids import iso, parse_iso
 from nexus_orchestrator.pubsub import TimelineBroker
 from nexus_orchestrator.state.db import Database, Transaction
 from nexus_orchestrator.workflow.transitions import (
+    MAX_ATTEMPTS,
+    IllegalTransition,
     check_task_insert,
     investigation_allowed,
     task_allowed,
@@ -73,9 +75,12 @@ class TaskRecord:
     token_reservation: int
     acked_at: str | None
     version: int
+    updated_at: datetime
+    usage_tokens: int | None = None  # input + output tokens from ``usage_json``; None if unset
 
     @classmethod
     def from_row(cls, row: aiosqlite.Row) -> TaskRecord:
+        usage = json.loads(row["usage_json"]) if row["usage_json"] else None
         return cls(
             id=row["id"],
             investigation_id=row["investigation_id"],
@@ -88,6 +93,12 @@ class TaskRecord:
             token_reservation=row["token_reservation"],
             acked_at=row["acked_at"],
             version=row["version"],
+            updated_at=parse_iso(row["updated_at"]),
+            usage_tokens=(
+                int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+                if usage is not None
+                else None
+            ),
         )
 
 
@@ -329,11 +340,21 @@ class Repository:
                 tx, current.investigation_id, "task", current.id, current.status, to, reason, now
             )
             return Applied.DROPPED
+        fields = fields or {}
+        attempt = current.attempt
+        if to is OrchestratorTaskState.PENDING:
+            # FR-122, enforced at the write: a re-dispatch is attempt + 1, and there is only one.
+            attempt = fields.get("attempt", current.attempt)
+            if attempt != current.attempt + 1 or attempt > MAX_ATTEMPTS:
+                raise IllegalTransition(
+                    f"task {current.id} {current.status} -> PENDING needs attempt "
+                    f"{current.attempt + 1} <= {MAX_ATTEMPTS}, got {attempt}"
+                )
         values: dict[str, Any] = {
             "status": to.value,
             "status_reason": reason.value if reason else None,
             "updated_at": iso(now),
-            **(fields or {}),
+            **fields,
         }
         assignments = ", ".join(f"{col} = ?" for col in values)
         cur = await tx.execute(
@@ -344,10 +365,11 @@ class Repository:
         payload = TaskStatusChanged(
             task_id=current.id,
             agent_id=current.agent_id,
-            attempt=current.attempt,
+            attempt=attempt,
             from_state=current.status,
             to_state=to,
             reason=reason,
+            deadline=parse_iso(fields["deadline"]) if "deadline" in fields else None,
         ).model_dump(mode="json")
         await self.append_event(
             tx, current.investigation_id, TimelineEventType.TASK_STATUS_CHANGED, payload, now

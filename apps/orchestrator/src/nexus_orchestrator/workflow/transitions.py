@@ -28,6 +28,10 @@ class IllegalTransition(ValueError):
     pass
 
 
+# FR-122: one dispatch plus at most one re-dispatch per task.
+MAX_ATTEMPTS = 2
+
+
 INVESTIGATION_TRANSITIONS: dict[I, frozenset[I]] = {
     I.CREATED: frozenset({I.RUNNING, I.FAILED, I.CANCELLED}),
     I.RUNNING: frozenset({I.ANALYZING, I.PARTIAL, I.FAILED, I.CANCELLED}),

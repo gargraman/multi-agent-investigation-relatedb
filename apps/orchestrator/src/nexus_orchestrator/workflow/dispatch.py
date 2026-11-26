@@ -31,7 +31,6 @@ a sibling of ``a2a.submit`` instead of its child. That is the price of a stable 
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -47,8 +46,9 @@ from nexus_contracts.api.states import OrchestratorTaskState
 from nexus_contracts.common import Classification, ClassificationRank
 from nexus_contracts.events.timeline import TimelineEventType
 from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_orchestrator.clock import Clock, SystemClock
 from nexus_orchestrator.delegation.agent_client import AgentClient, SubmitKind, SubmitOutcome
-from nexus_orchestrator.ids import iso, utcnow
+from nexus_orchestrator.ids import iso
 from nexus_orchestrator.settings import OrchestratorSettings
 from nexus_orchestrator.state.db import Database
 from nexus_orchestrator.state.repository import InvestigationRecord, Repository, TaskRecord
@@ -120,7 +120,9 @@ class Dispatcher:
         agents: AgentClient,
         tracer: Tracer,
         is_leader: Callable[[], bool],
+        clock: Clock | None = None,
     ) -> None:
+        self.clock: Clock = clock or SystemClock()
         self.settings = settings
         self.db = db
         self.repo = repo
@@ -168,7 +170,7 @@ class Dispatcher:
                 extra={**log_extra, "detail": outcome.detail, "try": n, "of": attempts},
             )
             if n < attempts:
-                await asyncio.sleep(self.settings.dispatch_backoff_seconds)
+                await self.clock.sleep(self.settings.dispatch_backoff_seconds)
         await self._unreachable(task, attempts, outcome)
         return outcome
 
@@ -193,7 +195,7 @@ class Dispatcher:
         if outcome.status is AgentTaskStatus.REJECTED:
             await self._fail(task, ErrorCode.TASK_REJECTED)
             return
-        now = utcnow()
+        now = self.clock.now()
         async with self.db.transaction() as tx:
             await self.repo.transition_task(
                 tx, task, OrchestratorTaskState.DISPATCHED, now=now, fields={"acked_at": iso(now)}
@@ -205,7 +207,7 @@ class Dispatcher:
                 tx,
                 task,
                 OrchestratorTaskState.FAILED,
-                now=utcnow(),
+                now=self.clock.now(),
                 reason=code,
                 fields={"error_code": code.value, "error_category": CATEGORY_BY_CODE[code].value},
             )
@@ -232,5 +234,5 @@ class Dispatcher:
                     "tries": attempts,
                     "detail": outcome.detail if outcome else None,
                 },
-                utcnow(),
+                self.clock.now(),
             )

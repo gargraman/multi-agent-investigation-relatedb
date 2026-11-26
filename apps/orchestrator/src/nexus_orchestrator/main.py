@@ -28,6 +28,7 @@ from nexus_orchestrator import __version__
 from nexus_orchestrator.api.problems import install_problem_handlers
 from nexus_orchestrator.api.routes import api, probes
 from nexus_orchestrator.api.runtime import Runtime
+from nexus_orchestrator.clock import Clock, SystemClock
 from nexus_orchestrator.delegation.agent_client import AgentClient
 from nexus_orchestrator.delegation.agent_registry import AgentRegistry
 from nexus_orchestrator.delegation.context_client import ContextServiceClient
@@ -52,10 +53,12 @@ def create_app(
     agent_transport: httpx.AsyncBaseTransport | None = None,
     tracer_provider: TracerProvider | None = None,
     leader_holder: str | None = None,
+    clock: Clock | None = None,
 ) -> FastAPI:
     """Build the app. Tests inject ``context_transport`` / ``agent_transport`` (test doubles at
     the HTTP boundary) and a ``tracer_provider`` with an in-memory exporter."""
     settings = settings or OrchestratorSettings()  # type: ignore[call-arg]
+    clock = clock or SystemClock()
     provider = tracer_provider or setup_telemetry(settings)
     tracer = provider.get_tracer("nexus_orchestrator", __version__)
 
@@ -98,9 +101,11 @@ def create_app(
     def is_leader() -> bool:
         return leader.held
 
-    dispatcher = Dispatcher(settings, db, repo, agents, tracer, is_leader)
-    poller = Poller(settings, db, repo, catalog, agents, dispatcher, tracer, is_leader)
-    workflow = InvestigationWorkflow(settings, db, repo, catalog, context, tracer, poller, registry)
+    dispatcher = Dispatcher(settings, db, repo, agents, tracer, is_leader, clock)
+    poller = Poller(settings, db, repo, catalog, agents, dispatcher, tracer, is_leader, clock)
+    workflow = InvestigationWorkflow(
+        settings, db, repo, catalog, context, tracer, poller, registry, clock
+    )
     runtime = Runtime(
         settings, db, broker, repo, catalog, context, leader, workflow, agents, registry, poller
     )

@@ -15,7 +15,7 @@ S2 adds the agent registry (S2 spec FR-001, G14):
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import NoDecode
 
 from nexus_contracts.common import AgentId
@@ -73,6 +73,17 @@ class OrchestratorSettings(ServiceSettings):
     poll_read_timeout_seconds: float = Field(default=5.0, gt=0)
     # FR-008: agent cards are read at startup and every 30 s (E4 objective lock, E8 health).
     agent_card_refresh_seconds: float = Field(default=30.0, gt=0)
+
+    # -- S3b: failure paths ----------------------------------------------------------------------
+    # Smallest token headroom worth starting the analysis phase with (NEXUS_MIN_ANALYSIS_TOKENS).
+    min_analysis_tokens: int = Field(
+        default=8000,
+        ge=0,
+        validation_alias=AliasChoices("NEXUS_MIN_ANALYSIS_TOKENS", "min_analysis_tokens"),
+    )
+    # Reconciler sweep interval, and the per-step timeout when cancelling an investigation.
+    reconcile_interval_seconds: float = Field(default=30.0, gt=0)
+    cancel_step_timeout_seconds: float = Field(default=1.0, gt=0)
 
     @field_validator("nexus_enabled_agents", mode="before")
     @classmethod

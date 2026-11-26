@@ -39,13 +39,14 @@ from nexus_contracts.api.investigations import Investigation, InvestigationCreat
 from nexus_contracts.api.states import InvestigationStatus
 from nexus_contracts.events.timeline import InvestigationStatusChanged, TimelineEventType
 from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_orchestrator.clock import Clock, SystemClock
 from nexus_orchestrator.delegation.agent_registry import AgentRegistry
 from nexus_orchestrator.delegation.context_client import (
     ContextServiceClient,
     RegistrationOutcome,
     RegistrationResult,
 )
-from nexus_orchestrator.ids import new_investigation_id, new_task_id, utcnow
+from nexus_orchestrator.ids import new_investigation_id, new_task_id
 from nexus_orchestrator.scenarios import ScenarioCatalog
 from nexus_orchestrator.settings import OrchestratorSettings
 from nexus_orchestrator.state.db import Database
@@ -79,7 +80,9 @@ class InvestigationWorkflow:
         tracer: Tracer,
         poller: Poller,
         registry: AgentRegistry,
+        clock: Clock | None = None,
     ) -> None:
+        self.clock: Clock = clock or SystemClock()
         self.settings = settings
         self.db = db
         self.repo = repo
@@ -107,7 +110,7 @@ class InvestigationWorkflow:
             )
         objective = request.objective or manifest.objective
         investigation_id = new_investigation_id()
-        now = utcnow()
+        now = self.clock.now()
         attrs = {
             "nexus.investigation.id": investigation_id,
             "nexus.scenario.id": manifest.scenario_id,
@@ -178,7 +181,7 @@ class InvestigationWorkflow:
     async def begin(self, investigation_id: str, manifest: ScenarioManifest) -> None:
         """CREATED → RUNNING plus the task rows, in one transaction; then hand to the poller."""
         enabled = set(self.settings.nexus_enabled_agents)
-        now = utcnow()
+        now = self.clock.now()
         async with self.db.transaction() as tx:
             inv = await self.repo.tx_investigation_record(tx, investigation_id)
             if inv is None or inv.status is not InvestigationStatus.CREATED:

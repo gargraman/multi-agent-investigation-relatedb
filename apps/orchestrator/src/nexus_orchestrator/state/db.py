@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     llm_mode          TEXT{_LLM_MODE_CHECK}
 );
 CREATE INDEX IF NOT EXISTS ix_tasks_investigation ON tasks (investigation_id);
+CREATE INDEX IF NOT EXISTS ix_tasks_status_deadline ON tasks (status, deadline);
 
 CREATE TABLE IF NOT EXISTS leader (
     id           INTEGER PRIMARY KEY CHECK (id = 1),
