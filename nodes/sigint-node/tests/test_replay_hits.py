@@ -1,4 +1,5 @@
-"""Guard: the committed S2 SIGINT recordings still hit (the replay key material is unchanged)."""
+"""Guard: the committed SIGINT recordings still hit (S2 key material unchanged; S3a added
+``contradiction``)."""
 
 from __future__ import annotations
 
@@ -11,7 +12,9 @@ from nexus_sigint.spec import SIGINT
 from .conftest import FIXTURES, ROOT, make_request, manifest_for
 
 
-@pytest.mark.parametrize("scenario", ["baseline-corroboration", "prompt-injection"])
+@pytest.mark.parametrize(
+    "scenario", ["baseline-corroboration", "contradiction", "prompt-injection"]
+)
 async def test_committed_sigint_recordings_hit(scenario: str) -> None:
     request = make_request(scenario)
     outcome = await SIGINT.run(

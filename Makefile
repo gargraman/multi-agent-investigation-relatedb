@@ -2,6 +2,7 @@
 # Targets for slices not built yet print a notice and EXIT NON-ZERO (spec §19.1 rule 13:
 # never fake success).
 
+AGENT ?= sigint-agent
 UV ?= $(shell command -v uv 2>/dev/null || echo $(HOME)/.local/bin/uv)
 
 .DEFAULT_GOAL := help
@@ -64,9 +65,9 @@ WITH_ENV = set -a && . ./.env && set +a &&
 verify-openai: .env ## (S2) List models + strict-schema probe for OPENAI_MODEL_EXTRACT
 	@$(WITH_ENV) uv run python scripts/verify_openai.py
 
-record-replay: .env ## (S2) Oracle-gated live recording: make record-replay SCENARIO=prompt-injection
+record-replay: .env ## Oracle-gated live recording: make record-replay SCENARIO=contradiction [AGENT=geoint-agent]
 	@test -n "$(SCENARIO)" || { echo "usage: make record-replay SCENARIO=<id>" >&2; exit 2; }
-	@$(WITH_ENV) uv run python scripts/record_replay.py --scenario $(SCENARIO) --agent sigint-agent
+	@$(WITH_ENV) uv run python scripts/record_replay.py --scenario $(SCENARIO) --agent $(AGENT)
 
 spike-linux: .env ## ADR-001 R5: Relate spike suite inside the Linux Context Service image
 	scripts/spike_linux.sh

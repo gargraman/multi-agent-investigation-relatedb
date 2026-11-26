@@ -2,6 +2,7 @@
 
 Usage:
     uv run python scripts/record_replay.py --scenario prompt-injection --agent sigint-agent
+    uv run python scripts/record_replay.py --scenario contradiction --agent geoint-agent
     uv run python scripts/record_replay.py --scenario baseline-corroboration --agent sigint-agent \
         [--replay-root data/replay] [--data-root data] [--dry-run]
 
@@ -50,7 +51,7 @@ DEFAULT_MAX_TOKENS = 60000
 CONTRACT_VERSION = "1.0"
 OPENAI_TIMEOUT_S = 45.0  # S2 spec NFR-001
 OPENAI_MAX_RETRIES = 2
-SUPPORTED_AGENTS = {AgentId.SIGINT}  # GEOINT joins in S3 (spec §10.4)
+SUPPORTED_AGENTS = {AgentId.SIGINT, AgentId.GEOINT}  # S3a added GEOINT (spec §10.4)
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -181,7 +182,16 @@ def report(result: GateResult, scenario: str, agent: AgentId, dry_run: bool) -> 
         print(f"  - {v}", file=sys.stderr)
 
 
-# -- live wiring (WP-B interfaces, imported lazily) -------------------------------------------
+# -- live wiring (agent pipeline interfaces, imported lazily) -------------------------------
+
+
+def _pipeline_run(agent: AgentId) -> Any:
+    """The agent's ``pipeline.run`` coroutine function (imported lazily)."""
+    if agent is AgentId.GEOINT:
+        from nexus_geoint.pipeline import run
+    else:
+        from nexus_sigint.pipeline import run
+    return run
 
 
 async def run_live(
@@ -189,11 +199,13 @@ async def run_live(
     manifest: ScenarioManifest,
     fixtures_root: Path,
     env: dict[str, str],
+    agent: AgentId = AgentId.SIGINT,
 ) -> tuple[Any, Recorder]:
     from pydantic import SecretStr
 
     from nexus_shared.llm import OpenAIProvider, RecordingProvider, TokenBudget, build_ssl_context
-    from nexus_sigint.pipeline import run
+
+    run = _pipeline_run(agent)
 
     inner = OpenAIProvider(
         model=env.get("OPENAI_MODEL_EXTRACT") or DEFAULT_MODEL,
@@ -229,7 +241,9 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             raise Refused(f"unknown agent {args.agent!r}") from exc
         if agent not in SUPPORTED_AGENTS:
-            raise Refused(f"{agent} has no live pipeline yet (supported: sigint-agent)")
+            raise Refused(
+                f"{agent} has no live pipeline yet (supported: sigint-agent, geoint-agent)"
+            )
         check_environment(env)
         scenario_dir = args.data_root / "scenarios" / args.scenario
         if not (scenario_dir / "manifest.yaml").is_file():
@@ -241,7 +255,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
 
-    outcome, recorder = asyncio.run(run_live(request, manifest, args.data_root / "fixtures", env))
+    outcome, recorder = asyncio.run(
+        run_live(request, manifest, args.data_root / "fixtures", env, agent)
+    )
     result = decide_and_write(
         outcome, manifest.oracle, agent, recorder, args.replay_root, args.dry_run
     )

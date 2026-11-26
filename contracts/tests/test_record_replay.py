@@ -219,7 +219,25 @@ def test_refuses_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_refuses_unknown_or_unsupported_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     env = {"OPENAI_API_KEY": "x"}
     assert run_main(monkeypatch, env, "--agent", "nobody") == 2
-    assert run_main(monkeypatch, env, "--agent", "geoint-agent") == 2
+    assert run_main(monkeypatch, env, "--agent", "analysis-agent") == 2
+
+
+def test_geoint_is_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--agent geoint-agent --dry-run`` gets past the refusal checks into ``run_live``."""
+    seen: dict[str, Any] = {}
+
+    async def fake_run_live(
+        request: Any, manifest: Any, fixtures_root: Path, env: Any, agent: Any = None
+    ) -> Any:
+        seen["task_type"] = request.task_type
+        return FakeOutcome(batch=batch(draft("ent_a", "ent_b", ["ev-1"]))), FakeRecorder()
+
+    monkeypatch.setattr(rr, "run_live", fake_run_live)
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    monkeypatch.delenv("NEXUS_LLM_MODE", raising=False)
+    code = rr.main(["--scenario", "contradiction", "--agent", "geoint-agent", "--dry-run"])
+    assert seen["task_type"] == "analyze_synthetic_geospatial"
+    assert code in (0, 1)  # reached the gate (not refused); the fake batch need not pass it
 
 
 def test_refuses_unknown_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
