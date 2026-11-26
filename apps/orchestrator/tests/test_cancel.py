@@ -462,3 +462,52 @@ def _ctx_log_len(ctx: FakeContextService, n: int) -> Callable[[], Awaitable[bool
         return len(ctx.log) >= n
 
     return check
+
+
+@pytest.mark.parametrize("failure", ["hangs", "raises"])
+async def test_failed_late_registration_close_reopens_context_closed(
+    make_two, monkeypatch, failure: str
+) -> None:
+    """Carry-in from I2: the fence counted the close as done (404 -> context_closed = 1), then the
+    late-registered record's own close fails. context_closed goes back to 0, so the FR-126
+    reconciler retries it (it only selects 0)."""
+    clock = FakeClock(utcnow())
+    sig, geo, ctx = held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService()
+    ctx.create_gate = asyncio.Event()
+    app = make_two(sig, geo, ctx, clock, context_service_timeout_seconds=0.05)
+    async with running(app) as client:
+        rt = runtime(app)
+        creating = asyncio.create_task(create(client))
+        await wait_until(_create_entered(ctx))
+        [inv_id] = await rt.repo.list_ids_with_status(I.CREATED)
+
+        resp = await client.post(cancel_url(inv_id))
+        assert resp.json()["context_closed"] is True  # the fence's close "succeeded"
+
+        if failure == "hangs":
+            ctx.close_hangs = True
+        else:
+
+            async def boom(*args, **kwargs):
+                raise RuntimeError("context service exploded")
+
+            monkeypatch.setattr(rt.context, "close", boom)
+        ctx.create_gate.set()
+        assert await creating == inv_id
+
+        async def reopened() -> bool:
+            record = await rt.repo.investigation_record(inv_id)
+            return record is not None and record.context_closed is False
+
+        await wait_until(reopened)
+
+        # The reconciler's next pass now picks it up (Context Service healthy again).
+        ctx.close_hangs = False
+        monkeypatch.undo()
+        clock.advance(30)
+
+        async def closed_again() -> bool:
+            record = await rt.repo.investigation_record(inv_id)
+            return record is not None and record.context_closed is True
+
+        await wait_until(closed_again)

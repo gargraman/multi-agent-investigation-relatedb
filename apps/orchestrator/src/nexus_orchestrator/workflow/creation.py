@@ -188,10 +188,9 @@ class InvestigationWorkflow:
         if record is None or not record.status.is_terminal:
             return
         try:
-            closed = await self.context.close(
-                investigation_id,
-                record.status,
-                timeout=self.settings.context_service_timeout_seconds,
+            timeout = self.settings.context_service_timeout_seconds
+            closed = await asyncio.wait_for(
+                self.context.close(investigation_id, record.status, timeout=timeout), timeout
             )
         except Exception:
             closed = False
@@ -203,6 +202,16 @@ class InvestigationWorkflow:
                 "could not close a late-registered Context Service record",
                 extra={"investigation_id": investigation_id, "status": record.status.value},
             )
+            # The fence's close counted as done (context_closed = 1); reopen it so FR-126 retries.
+            try:
+                async with self.db.transaction() as tx:
+                    await self.repo.set_context_closed(
+                        tx, investigation_id, False, self.clock.now()
+                    )
+            except Exception:
+                log.exception(
+                    "could not reopen context_closed", extra={"investigation_id": investigation_id}
+                )
 
     async def begin(self, investigation_id: str, manifest: ScenarioManifest) -> bool:
         """CREATED → RUNNING plus the task rows, in one transaction; then hand to the poller.

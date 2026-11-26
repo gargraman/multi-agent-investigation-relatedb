@@ -450,10 +450,11 @@ async def events(client, inv_id: str, type_: str) -> list[TimelineEvent]:
 
 
 async def parked(clock: FakeClock) -> None:
-    """Wait until the driver has finished its tick and is sleeping on the clock again."""
+    """Wait until the driver has finished its tick and is sleeping on the clock again. The close
+    reconciler (FR-126) always holds one sleeper of its own, so the driver is the second."""
 
     async def sleeping() -> bool:
-        return clock.pending() >= 1
+        return clock.pending() >= 2
 
     await wait_until(sleeping)
 

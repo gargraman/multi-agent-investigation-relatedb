@@ -6,8 +6,8 @@ Run with exactly one worker::
 
 Lifespan order (ADR-008 F3): open DB + schema → leader lock (wait ≤ 30 s, else startup fails) →
 first agent-card read (E4 lock, FR-008) → resume sweep (re-register CREATED, restart drivers
-for RUNNING) → background retrier + card refresh → serve. ``/readyz`` turns green only after
-the sweep.
+for RUNNING) → background retrier + card refresh + close reconciler → serve. ``/readyz`` turns
+green only after the sweep.
 
 Shutdown (ADR-005 D5): mark not-ready, close SSE streams, cancel background tasks and drivers,
 release the leader row, close clients and DB. No investigation or task status is changed.
@@ -42,6 +42,7 @@ from nexus_orchestrator.workflow.creation import InvestigationWorkflow
 from nexus_orchestrator.workflow.dispatch import Dispatcher
 from nexus_orchestrator.workflow.fence import Fence
 from nexus_orchestrator.workflow.poller import Poller
+from nexus_orchestrator.workflow.reconciler import CloseReconciler
 from nexus_shared.telemetry import instrument_app, setup_telemetry
 
 log = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ def create_app(
     workflow = InvestigationWorkflow(
         settings, db, repo, catalog, context, tracer, poller, registry, clock
     )
+    reconciler = CloseReconciler(settings, repo, db, context, tracer, clock, is_leader)
     runtime = Runtime(
         settings,
         db,
@@ -124,6 +126,7 @@ def create_app(
         poller,
         fence,
         tracer,
+        reconciler,
     )
 
     @asynccontextmanager
@@ -135,6 +138,7 @@ def create_app(
             await workflow.resume_sweep()
             workflow.start()
             registry.start()
+            reconciler.start()
             runtime.sweep_done = True
             log.info("orchestrator ready", extra={"holder": leader.holder})
         except BaseException:
@@ -163,6 +167,7 @@ async def _shutdown(rt: Runtime) -> None:
     rt.broker.close()
     await rt.workflow.stop()
     await rt.registry.stop()
+    await rt.reconciler.stop()
     await rt.poller.stop()
     try:
         await rt.leader.release()

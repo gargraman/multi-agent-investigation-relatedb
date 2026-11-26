@@ -19,6 +19,7 @@ from nexus_orchestrator.state.repository import Repository
 from nexus_orchestrator.workflow.creation import InvestigationWorkflow
 from nexus_orchestrator.workflow.fence import Fence
 from nexus_orchestrator.workflow.poller import Poller
+from nexus_orchestrator.workflow.reconciler import CloseReconciler
 
 
 @dataclass
@@ -36,6 +37,7 @@ class Runtime:
     poller: Poller
     fence: Fence
     tracer: Tracer
+    reconciler: CloseReconciler
     sweep_done: bool = False
     shutting_down: bool = False
 

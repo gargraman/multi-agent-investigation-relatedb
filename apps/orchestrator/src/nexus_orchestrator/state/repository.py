@@ -574,6 +574,17 @@ class Repository:
         )
         return [r["id"] for r in rows]
 
+    async def list_unclosed_terminal(self) -> list[tuple[str, InvestigationStatus]]:
+        """Terminal investigations whose Context Service close has not landed (FR-126)."""
+        terminal = [s.value for s in InvestigationStatus if s.is_terminal]
+        marks = ",".join("?" * len(terminal))
+        rows = await self.db.fetchall(
+            f"""SELECT id, status FROM investigations
+                WHERE context_closed = 0 AND status IN ({marks}) ORDER BY created_at""",
+            tuple(terminal),
+        )
+        return [(r["id"], InvestigationStatus(r["status"])) for r in rows]
+
     async def events_after(
         self, investigation_id: str, after_seq: int, limit: int
     ) -> list[TimelineEvent]:
