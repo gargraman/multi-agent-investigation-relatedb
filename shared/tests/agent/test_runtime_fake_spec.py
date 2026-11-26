@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -10,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from fastapi import FastAPI
 from opentelemetry import trace
 
@@ -17,7 +20,7 @@ from nexus_contracts.a2a.task import AgentTaskStatus, TaskRequest, TaskUsage
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.common import AgentId
 from nexus_contracts.scenario.manifest import ScenarioManifest
-from nexus_shared.agent.app import create_agent_app
+from nexus_shared.agent.app import create_agent_app, lazy_app
 from nexus_shared.agent.settings import AgentSettings
 from nexus_shared.agent.spec import AgentSpec, PipelineOutcome
 from nexus_shared.llm import LLMProvider, TokenBudget
@@ -36,6 +39,13 @@ class FakeSpec:
     role: str = "Fake specialist used by the shared-runtime tests"
     version: str = "0.0.0-test"
     runs: list[TaskRequest] = field(default_factory=list)
+    # Concurrency hooks: ``started[attempt]`` is set when ``run`` begins; a run whose attempt has
+    # an entry in ``gates`` waits on that event; ``error`` is raised instead of returning.
+    started: defaultdict[int, asyncio.Event] = field(
+        default_factory=lambda: defaultdict(asyncio.Event)
+    )
+    gates: dict[int, asyncio.Event] = field(default_factory=dict)
+    error: Exception | None = None
 
     def validate_request(
         self, request: TaskRequest, manifest: ScenarioManifest | None
@@ -55,6 +65,12 @@ class FakeSpec:
         tracer: trace.Tracer | None = None,
     ) -> PipelineOutcome:
         self.runs.append(request)
+        self.started[request.attempt].set()
+        gate = self.gates.get(request.attempt)
+        if gate is not None:
+            await gate.wait()
+        if self.error is not None:
+            raise self.error
         return self.outcome
 
 
@@ -169,3 +185,35 @@ async def test_fake_spec_policy_rejection_skips_run(tmp_path: Path) -> None:
         body = (await c.get("/v1/tasks/tsk_1", headers=ORCH)).json()
     assert body["status"] == "REJECTED" and body["agent_id"] == "geoint-agent"
     assert spec.runs == []
+
+
+def test_lazy_app_builds_once_on_first_app_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nexus_shared.agent import app as app_module
+
+    for var in ("SERVICE_TOKEN", "SQLITE_PATH", "NEXUS_TOKEN_ORCHESTRATOR"):
+        monkeypatch.delenv(var, raising=False)
+    spec = FakeSpec(
+        agent_id=AgentId.GEOINT,
+        task_types=("analyze_synthetic_geospatial",),
+        outcome=completed_with_batch(),
+    )
+
+    class FakeSettings(AgentSettings):
+        service_name: str = "fake-agent"
+
+    logged: list[str] = []
+    monkeypatch.setattr(app_module, "configure_logging", lambda name, level: logged.append(name))
+    getattr_ = lazy_app(spec, FakeSettings)  # no env vars needed to build the hook
+    assert logged == []
+
+    with pytest.raises(AttributeError):
+        getattr_("not_app")
+
+    monkeypatch.setenv("SERVICE_TOKEN", "s" * 40)
+    monkeypatch.setenv("SQLITE_PATH", ":memory:")
+    monkeypatch.setenv("NEXUS_LLM_MODE", "replay")
+    monkeypatch.setenv("NEXUS_TOKEN_ORCHESTRATOR", "o" * 40)
+    first = getattr_("app")
+    assert isinstance(first, FastAPI) and first.state.spec is spec
+    assert getattr_("app") is first  # cached
+    assert logged == ["fake-agent"]

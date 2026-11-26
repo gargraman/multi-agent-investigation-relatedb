@@ -5,7 +5,7 @@ body (idempotent on ``task_id``). Outcomes:
 
 - 201/200 → committed ids;
 - 409 ``already_committed`` → the committed ids from ``AlreadyCommittedProblem`` (COMPLETED);
-- 409 ``investigation_cancelled`` → FAILED(``investigation_cancelled``);
+- 409 ``investigation_cancelled`` → ``cancelled=True`` (the runner ends the attempt CANCELED);
 - retries exhausted → FAILED(``context_unavailable``);
 - 422 or any other 4xx → FAILED(``submission_rejected``).
 """
@@ -37,6 +37,7 @@ class SubmitResult:
     finding_ids: list[str]
     error: ErrorCode | None = None
     already_committed: bool = False
+    cancelled: bool = False  # 409 investigation_cancelled: the investigation was fenced (S3)
 
 
 class ContextServiceClient:
@@ -97,7 +98,7 @@ class ContextServiceClient:
                     committed = AlreadyCommittedProblem.model_validate(resp.json())
                     return SubmitResult(committed.finding_ids, already_committed=True)
                 if problem.code == ErrorCode.INVESTIGATION_CANCELLED:
-                    return SubmitResult([], ErrorCode.INVESTIGATION_CANCELLED)
+                    return SubmitResult([], ErrorCode.INVESTIGATION_CANCELLED, cancelled=True)
         except (ValueError, ValidationError):
             log.error("unparseable context service response", extra={"status": status})
         log.warning("batch rejected", extra={"status": status})

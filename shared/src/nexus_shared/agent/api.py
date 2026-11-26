@@ -2,7 +2,10 @@
 
 - ``POST /v1/tasks`` (orchestrator token only): 202 new (SUBMITTED or REJECTED), 200 duplicate
   with the current status, 409 ``content_conflict`` / ``stale_attempt``, 422 malformed body.
+  A new, higher attempt supersedes running lower ones: they end CANCELED (S3).
 - ``GET /v1/tasks/{task_id}``: TaskResult of the highest attempt; 404 if unknown.
+- ``POST /v1/tasks/{task_id}/cancel`` (orchestrator token only): 200 ``TaskCancelResponse`` with
+  the latest attempt's status (idempotent; a terminal row is left as is); 404 if unknown.
 - ``GET /.well-known/agent-card.json``, ``/livez``, ``/readyz``: unauthenticated (G20).
 
 Every error is ``application/problem+json`` (spec §12). Agent-specific behaviour (identity, task
@@ -20,7 +23,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from nexus_contracts.a2a.task import AgentCard, TaskRequest, TaskResult, TaskSubmitResponse
+from nexus_contracts.a2a.task import (
+    AgentCard,
+    TaskCancelResponse,
+    TaskRequest,
+    TaskResult,
+    TaskSubmitResponse,
+)
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
 from nexus_contracts.common import Classification
@@ -179,6 +188,14 @@ async def submit_task(body: TaskRequest, request: Request, _caller: Caller) -> J
             "status": row.status.value,
         },
     )
+    if body.attempt > 1:
+        superseded = await store.supersede_lower_attempts(body.task_id, body.attempt)
+        if superseded:
+            log.info(
+                "lower attempts superseded",
+                extra={"task_id": body.task_id, "attempt": body.attempt, "superseded": superseded},
+            )
+        runner.cancel(body.task_id)  # only lower attempts can be running at this point
     if rejected is None:
         runner.start(body)
     return JSONResponse(response.model_dump(mode="json"), status_code=202)
@@ -190,6 +207,20 @@ async def get_task(task_id: str, request: Request, _caller: Caller) -> TaskResul
     if row is None:
         raise ProblemError(404, "unknown task")
     return row.to_result()
+
+
+@router.post("/v1/tasks/{task_id}/cancel", response_model=TaskCancelResponse)
+async def cancel_task(task_id: str, request: Request, _caller: Caller) -> TaskCancelResponse:
+    state = request.app.state
+    row = await state.store.request_cancel(task_id)
+    if row is None:
+        raise ProblemError(404, "unknown task")
+    state.runner.cancel(task_id)
+    log.info(
+        "task cancel requested",
+        extra={"task_id": task_id, "attempt": row["attempt"], "status": row.status.value},
+    )
+    return TaskCancelResponse(task_id=row["task_id"], status=row.status)
 
 
 @router.get("/.well-known/agent-card.json", response_model=AgentCard)

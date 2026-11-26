@@ -6,8 +6,14 @@ COMPLETED/FAILED. Nothing here is agent-specific: the :class:`AgentSpec` supplie
 
 - The agent self-cancels at ``deadline + grace`` (ADR-003 B3) while detecting/calling the LLM,
   never during the commit: a commit that started is not interrupted (§8.3).
-- An unexpected internal error ends the attempt FAILED(``agent_restarted``): the same outcome a
-  crash produces after the boot sweep, and re-dispatchable by the orchestrator (S3).
+- An unexpected internal error ends the attempt FAILED(``internal_error``). Only the boot sweep
+  produces ``agent_restarted`` (S3).
+- Agent-side cancel (S3 FR-102–106): cancel points are before ``spec.run`` and before the commit;
+  a cancel that arrives while ``spec.run`` is in flight also cancels that asyncio task. A commit
+  that started is never interrupted; a Context Service 409 ``investigation_cancelled`` ends the
+  attempt CANCELED. Shutdown (:meth:`TaskRunner.stop`) is not a cancel: its rows stay WORKING for
+  the next boot sweep. The two are told apart by :attr:`_Run.interrupted`, which only
+  :meth:`TaskRunner.cancel` sets, and by ``_stopping``.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,6 +38,19 @@ from nexus_shared.agent.store import TaskRow, TaskStore, utcnow
 from nexus_shared.llm import LLMProvider, TokenBudget
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class _Run:
+    """In-memory state of one running attempt."""
+
+    phase: str = "pending"  # "pending" -> "run" (in spec.run) -> "commit" (in submit_batch)
+    cancel_requested: bool = False  # set by TaskRunner.cancel; checked at the cancel points
+    interrupted: bool = False  # TaskRunner.cancel cancelled the asyncio task (phase "run")
+    task: asyncio.Task[None] | None = None
+
+
+CANCELED_SUMMARY = "Task canceled."
 
 
 class TaskRunner:
@@ -57,12 +77,35 @@ class TaskRunner:
         self.context = context
         self.deadline_grace_s = deadline_grace_s
         self._tasks: set[asyncio.Task[None]] = set()
+        self._runs: dict[tuple[str, int], _Run] = {}
+        self._stopping = False
 
     def start(self, request: TaskRequest) -> asyncio.Task[None]:
-        task = asyncio.create_task(self._guarded(request), name=f"task:{request.task_id}")
+        key = (request.task_id, request.attempt)
+        run = _Run()
+        self._runs[key] = run
+        task = asyncio.create_task(self._guarded(request, run), name=f"task:{request.task_id}")
+        run.task = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(lambda _t: self._forget(key, run))
         return task
+
+    def _forget(self, key: tuple[str, int], run: _Run) -> None:
+        if self._runs.get(key) is run:
+            del self._runs[key]
+
+    def cancel(self, task_id: str) -> None:
+        """Cancel the in-flight run(s) of ``task_id``, if any. Every run is flagged (checked at
+        the cancel points); only a run inside ``spec.run`` has its asyncio task cancelled, so a
+        commit that started is never interrupted."""
+        for (tid, _attempt), run in list(self._runs.items()):
+            if tid != task_id:
+                continue
+            run.cancel_requested = True
+            if run.phase == "run" and run.task is not None and not run.task.done():
+                run.interrupted = True
+                run.task.cancel()
 
     async def drain(self) -> None:
         """Wait for running tasks (tests)."""
@@ -71,11 +114,12 @@ class TaskRunner:
 
     async def stop(self) -> None:
         """Shutdown: cancel in-flight runs. Their rows stay WORKING; the next boot sweeps them."""
+        self._stopping = True
         for t in list(self._tasks):
             t.cancel()
         await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
-    async def _guarded(self, request: TaskRequest) -> None:
+    async def _guarded(self, request: TaskRequest, run: _Run) -> None:
         ctx = TraceContextTextMapPropagator().extract(
             {
                 "traceparent": request.trace_context.traceparent,
@@ -86,14 +130,27 @@ class TaskRunner:
             span.set_attribute("nexus.task_id", request.task_id)
             span.set_attribute("nexus.attempt", request.attempt)
             try:
-                await self._execute(request)
+                await self._execute(request, run)
             except asyncio.CancelledError:
-                raise
+                if not run.interrupted or self._stopping:
+                    raise  # shutdown: the row stays WORKING for the next boot sweep
+                current = asyncio.current_task()
+                if current is not None:
+                    current.uncancel()
+                log.info("task canceled in flight", extra=_ids(request))
+                await self._cancel_current(request)
             except Exception:
                 log.exception("task crashed", extra=_ids(request))
-                await self._fail_latest(request, ErrorCode.AGENT_RESTARTED)
+                await self._fail_latest(request, ErrorCode.INTERNAL_ERROR)
 
-    async def _execute(self, request: TaskRequest) -> None:
+    async def _cancel_point(self, row: TaskRow, run: _Run) -> bool:
+        """True if a cancel was requested for this attempt (in memory or in the store)."""
+        if run.cancel_requested:
+            return True
+        flagged = await self.store.is_cancel_requested(row["task_id"], row["attempt"])
+        return flagged or run.cancel_requested  # re-check: a cancel may land during the read
+
+    async def _execute(self, request: TaskRequest, run: _Run) -> None:
         row = await self.store.get(request.task_id, request.attempt)
         if row is None or row.status is not AgentTaskStatus.SUBMITTED:
             return
@@ -109,10 +166,15 @@ class TaskRunner:
             await self._finish(row, AgentTaskStatus.FAILED, error=ErrorCode.TASK_REJECTED)
             return
 
+        if await self._cancel_point(row, run):  # cancel point (a): before the LLM call
+            await self._finish(row, AgentTaskStatus.CANCELED, summary=CANCELED_SUMMARY)
+            return
+
         remaining = (request.deadline - datetime.now(UTC)).total_seconds() + self.deadline_grace_s
         try:
             if remaining <= 0:
                 raise TimeoutError
+            run.phase = "run"
             outcome = await asyncio.wait_for(
                 self.spec.run(
                     request,
@@ -125,6 +187,7 @@ class TaskRunner:
                 timeout=remaining,
             )
         except TimeoutError:
+            run.phase = "pending"
             await self._finish(
                 row,
                 AgentTaskStatus.FAILED,
@@ -132,6 +195,7 @@ class TaskRunner:
                 summary="Task failed: deadline_exceeded.",
             )
             return
+        run.phase = "pending"
 
         common = {
             "usage": outcome.usage,
@@ -139,15 +203,27 @@ class TaskRunner:
             "prompt_version": outcome.prompt_version,
             "warnings": outcome.warnings,
         }
+        if await self._cancel_point(row, run):  # cancel point (b): before the commit
+            await self._finish(row, AgentTaskStatus.CANCELED, summary=CANCELED_SUMMARY, **common)
+            return
         if outcome.status is not AgentTaskStatus.COMPLETED:
-            code = outcome.error.code if outcome.error else ErrorCode.AGENT_RESTARTED
+            code = outcome.error.code if outcome.error else ErrorCode.INTERNAL_ERROR
             await self._finish(row, outcome.status, error=code, summary=outcome.summary, **common)
             return
         if outcome.batch is None:  # zero candidates: COMPLETED, no submit (FR-031)
             await self._finish(row, AgentTaskStatus.COMPLETED, summary=outcome.summary, **common)
             return
 
+        run.phase = "commit"  # from here on, a cancel never interrupts the task
         result = await self.context.submit_batch(outcome.batch)
+        if result.cancelled:  # 409 investigation_cancelled: the investigation was fenced
+            await self._finish(
+                row,
+                AgentTaskStatus.CANCELED,
+                summary="Task canceled: the investigation was cancelled.",
+                **common,
+            )
+            return
         if result.error is not None:
             await self._finish(
                 row,
@@ -216,6 +292,11 @@ class TaskRunner:
                 "llm_calls": usage.llm_calls,
             },
         )
+
+    async def _cancel_current(self, request: TaskRequest) -> None:
+        row = await self.store.get(request.task_id, request.attempt)
+        if row is not None and not row.status.is_terminal:
+            await self._finish(row, AgentTaskStatus.CANCELED, summary=CANCELED_SUMMARY)
 
     async def _fail_latest(self, request: TaskRequest, code: ErrorCode) -> None:
         row = await self.store.get(request.task_id, request.attempt)

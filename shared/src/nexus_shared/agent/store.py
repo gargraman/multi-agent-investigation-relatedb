@@ -3,7 +3,9 @@
 - ``aiosqlite`` (no blocking call on the loop), WAL, ``busy_timeout=5000``.
 - One connection, every statement behind one ``asyncio.Lock`` (single writer).
 - Dedup on ``(task_id, attempt)`` is decided inside one ``BEGIN IMMEDIATE`` transaction.
-- Every update is compare-and-set on ``version``.
+- Every update is compare-and-set on ``version``. The one exception is the ``cancel_requested``
+  flag: a monotonic 0 -> 1 marker set only on a non-terminal row, which does not bump ``version``
+  so the runner's in-flight compare-and-set is unaffected by a cancel request.
 - Boot sweep (FR-024): SUBMITTED/WORKING become FAILED(``agent_restarted``).
 - One store (one SQLite file) per agent: rows carry no agent column; every row and
   ``TaskResult`` reports the store's ``agent_id``.
@@ -76,6 +78,8 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
 CREATE INDEX IF NOT EXISTS ix_agent_tasks_status ON agent_tasks(status);
 """
 
+NON_TERMINAL = ("SUBMITTED", "WORKING")
+
 BOOT_SWEEP = """
 UPDATE agent_tasks
    SET status='FAILED', error_category=:cat, error_code='agent_restarted',
@@ -106,9 +110,10 @@ def utcnow() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-HASH_EXCLUDED_FIELDS = frozenset({"trace_context"})
+HASH_EXCLUDED_FIELDS = frozenset({"trace_context", "deadline"})
 """Per-try fields left out of the dedup hash: the orchestrator re-POSTs the same task after a
-restart/retry with a fresh ``trace_context``; that must be a duplicate, not a conflict."""
+restart/retry with a fresh ``trace_context`` and a recomputed ``deadline``; that must be a
+duplicate, not a conflict (S3)."""
 
 
 def request_hash(request: TaskRequest) -> str:
@@ -319,3 +324,54 @@ class TaskStore:
             return await self._one(
                 conn, "SELECT * FROM agent_tasks WHERE task_id=? AND attempt=?", (task_id, attempt)
             )
+
+    async def request_cancel(self, task_id: str) -> TaskRow | None:
+        """Set ``cancel_requested`` on the latest attempt if it is not terminal (S3 FR-102).
+        Returns the latest row (``None`` for an unknown task). Idempotent; never touches a
+        terminal row, and does not bump ``version`` (see module docstring)."""
+        async with self._tx() as conn:
+            await conn.execute(
+                "UPDATE agent_tasks SET cancel_requested=1, updated_at=? "
+                "WHERE task_id=? AND cancel_requested=0 AND status IN (?,?) "
+                "AND attempt=(SELECT MAX(attempt) FROM agent_tasks WHERE task_id=?)",
+                (utcnow(), task_id, *NON_TERMINAL, task_id),
+            )
+            return await self._one(
+                conn,
+                "SELECT * FROM agent_tasks WHERE task_id=? ORDER BY attempt DESC LIMIT 1",
+                (task_id,),
+            )
+
+    async def is_cancel_requested(self, task_id: str, attempt: int) -> bool:
+        async with self._tx() as conn:
+            row = await self._one(
+                conn,
+                "SELECT cancel_requested FROM agent_tasks WHERE task_id=? AND attempt=?",
+                (task_id, attempt),
+            )
+        return row is not None and bool(row["cancel_requested"])
+
+    async def supersede_lower_attempts(self, task_id: str, attempt: int) -> list[int]:
+        """A higher attempt supersedes running lower ones: every non-terminal attempt below
+        ``attempt`` becomes CANCELED (version-guarded, with ``cancel_requested`` set). Returns the
+        superseded attempt numbers."""
+        now = utcnow()
+        done: list[int] = []
+        async with self._tx() as conn:
+            async with conn.execute(
+                "SELECT attempt, version FROM agent_tasks "
+                "WHERE task_id=? AND attempt<? AND status IN (?,?)",
+                (task_id, attempt, *NON_TERMINAL),
+            ) as cur:
+                rows = await cur.fetchall()
+            for lower, version in rows:
+                cur = await conn.execute(
+                    "UPDATE agent_tasks SET status='CANCELED', cancel_requested=1, "
+                    "summary='Task canceled: superseded by a higher attempt.', "
+                    "completed_at=?, updated_at=?, version=version+1 "
+                    "WHERE task_id=? AND attempt=? AND version=?",
+                    (now, now, task_id, lower, version),
+                )
+                if cur.rowcount == 1:
+                    done.append(lower)
+        return done
