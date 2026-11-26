@@ -218,6 +218,16 @@ class FakeAgent:
     - ``reply_attempt`` makes poll results claim another attempt (a late reply from attempt 1).
     - ``up = False`` makes every request a connect error; ``lose_response = True`` lets the
       agent process the request, then drops the reply (a read error), as after a network cut.
+
+    Chaos knobs (spec §12, ``tests/chaos``), all over the fields above:
+
+    - ``hang()``: acknowledge, then report WORKING forever (an agent that never answers).
+    - ``restart()``: the next poll of a task that is still open answers
+      ``FAILED(agent_restarted)``, as the agent's boot sweep would; later attempts are unaffected.
+    - ``down()`` / ``bring_up()``: ``up = False`` / ``True`` (every request, so submit, poll and
+      ``/readyz`` alike, is a connect error while down). Not ``up()``: that name is the field.
+    - ``answer_after(seconds, clock)``: reports WORKING until ``seconds`` of ``clock`` time have
+      passed since the task was acknowledged, then COMPLETED.
     """
 
     def __init__(
@@ -252,10 +262,30 @@ class FakeAgent:
         self.submit_gate: asyncio.Event | None = None  # holds POST /v1/tasks until set
         self.submit_entered = 0  # submits that reached the agent (before the gate)
         self.card_reads = 0
+        self.restart_pending = False
+        self.answer_clock: FakeClock | None = None
+        self.answer_delay = 0.0
         self.app = self._build()
 
     def forget(self) -> None:
         self.tasks.clear()
+
+    def hang(self) -> None:
+        self.script = [S.WORKING]
+        for task in self.tasks.values():  # a task already past WORKING must not index past it
+            task["step"] = min(task["step"], 1)
+
+    def restart(self) -> None:
+        self.restart_pending = True
+
+    def down(self) -> None:
+        self.up = False
+
+    def bring_up(self) -> None:
+        self.up = True
+
+    def answer_after(self, seconds: float, clock: FakeClock) -> None:
+        self.answer_clock, self.answer_delay = clock, seconds
 
     def statuses(self) -> list[int]:
         return [code for code, _, _ in self.submits]
@@ -293,7 +323,7 @@ class FakeAgent:
             model_id="fake-model-1" if terminal else None,
             completed_at=utcnow() if terminal else None,
             error=(
-                TaskError.for_code(self.fail_code)
+                TaskError.for_code(task.get("error") or self.fail_code)
                 if status is S.FAILED
                 else TaskError.for_code(ErrorCode.TASK_REJECTED)
                 if status is S.REJECTED
@@ -352,6 +382,12 @@ class FakeAgent:
                 "hash": digest,
                 "step": 0,
                 "status": None,
+                "error": None,
+                "answer_at": (
+                    fake.answer_clock.now() + timedelta(seconds=fake.answer_delay)
+                    if fake.answer_clock is not None
+                    else None
+                ),
             }
             fake.submits.append((202, body, request.headers))
             return JSONResponse(
@@ -368,6 +404,14 @@ class FakeAgent:
                 return JSONResponse({"title": "Not Found", "status": 404}, status_code=404)
             if fake.submit_status.is_terminal:
                 task["status"] = fake.submit_status
+            elif fake._current(task).is_terminal:
+                pass  # already answered: later polls repeat it
+            elif fake.restart_pending:
+                fake.restart_pending = False
+                task["status"], task["error"] = S.FAILED, ErrorCode.AGENT_RESTARTED
+            elif task["answer_at"] is not None:
+                done = fake.answer_clock.now() >= task["answer_at"]
+                task["status"] = S.COMPLETED if done else S.WORKING
             elif not fake.hold and task["step"] < len(fake.script):
                 task["step"] += 1
             return JSONResponse(fake._result(task_id, task).model_dump(mode="json"))
