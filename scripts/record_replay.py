@@ -199,7 +199,8 @@ async def run_live(
     manifest: ScenarioManifest,
     fixtures_root: Path,
     env: dict[str, str],
-    agent: AgentId = AgentId.SIGINT,
+    *,
+    agent: AgentId,
 ) -> tuple[Any, Recorder]:
     from pydantic import SecretStr
 
@@ -256,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     outcome, recorder = asyncio.run(
-        run_live(request, manifest, args.data_root / "fixtures", env, agent)
+        run_live(request, manifest, args.data_root / "fixtures", env, agent=agent)
     )
     result = decide_and_write(
         outcome, manifest.oracle, agent, recorder, args.replay_root, args.dry_run

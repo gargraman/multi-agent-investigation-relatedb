@@ -227,9 +227,10 @@ def test_geoint_is_supported(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
     async def fake_run_live(
-        request: Any, manifest: Any, fixtures_root: Path, env: Any, agent: Any = None
+        request: Any, manifest: Any, fixtures_root: Path, env: Any, *, agent: Any
     ) -> Any:
         seen["task_type"] = request.task_type
+        seen["agent"] = agent
         return FakeOutcome(batch=batch(draft("ent_a", "ent_b", ["ev-1"]))), FakeRecorder()
 
     monkeypatch.setattr(rr, "run_live", fake_run_live)
@@ -237,7 +238,24 @@ def test_geoint_is_supported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEXUS_LLM_MODE", raising=False)
     code = rr.main(["--scenario", "contradiction", "--agent", "geoint-agent", "--dry-run"])
     assert seen["task_type"] == "analyze_synthetic_geospatial"
+    assert seen["agent"] is AgentId.GEOINT  # main forwards --agent; no SIGINT fallback
     assert code in (0, 1)  # reached the gate (not refused); the fake batch need not pass it
+
+
+def test_pipeline_run_is_per_agent() -> None:
+    import nexus_geoint.pipeline
+    import nexus_sigint.pipeline
+
+    assert rr._pipeline_run(AgentId.GEOINT) is nexus_geoint.pipeline.run
+    assert rr._pipeline_run(AgentId.SIGINT) is nexus_sigint.pipeline.run
+
+
+def test_run_live_requires_agent() -> None:
+    import inspect
+
+    param = inspect.signature(rr.run_live).parameters["agent"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty
 
 
 def test_refuses_unknown_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
