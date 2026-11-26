@@ -150,7 +150,9 @@ async def cancel_investigation(
     """FR-125: fence-first cancel from CREATED, RUNNING or ANALYZING, all within the request
     (``Fence.end``: investigation row, Context Service close, agent cancels, tasks). The status
     is checked first so a refused cancel writes nothing, not even a ``transition.dropped`` note;
-    losing a race to another ender shows up as ``applied=False`` and is the same 409."""
+    losing a race to another ender shows up as ``applied=False`` and is the same 409. The driver
+    is not stopped here: it leaves at its next tick (the investigation is no longer RUNNING), so
+    a dispatch in flight finishes and cancels its own orphan (``Dispatcher._acked``)."""
     record = await rt.repo.investigation_record(investigation_id)
     if record is None:
         raise ProblemError(404, f"investigation {investigation_id} not found")
@@ -164,7 +166,6 @@ async def cancel_investigation(
         )
     if not result.applied:
         raise _terminal(result.status)
-    await rt.poller.stop_one(investigation_id)
     return InvestigationCancelResponse(
         id=investigation_id, status=result.status, context_closed=result.context_closed
     )

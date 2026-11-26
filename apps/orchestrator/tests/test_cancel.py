@@ -12,7 +12,6 @@ Two ``FakeAgent`` doubles sit behind one host-routing transport. The driver slee
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from collections.abc import Awaitable, Callable
 
@@ -108,6 +107,7 @@ async def test_cancel_running_returns_cancelled_context_closed_true(make_two, ex
         record = await runtime(app).repo.investigation_record(inv_id)
         body = (await client.get(f"/api/v1/investigations/{inv_id}")).json()
         ended = await terminal_events(client, inv_id)
+        await pump(clock, _driver_gone(app, inv_id))  # no stop call: it exits at its next tick
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"id": inv_id, "status": "CANCELLED", "context_closed": True}
@@ -119,7 +119,6 @@ async def test_cancel_running_returns_cancelled_context_closed_true(make_two, ex
     assert len(sig.cancels) == 1 and len(geo.cancels) == 1
     assert ctx.closes == [(inv_id, "CANCELLED")]
     assert len(ended) == 1 and ended[0]["to_status"] == "CANCELLED"
-    assert inv_id not in runtime(app).poller.active()  # the driver was stopped
     spans = [s for s in exporter.get_finished_spans() if s.name == "workflow.cancel"]
     assert len(spans) == 1
     assert spans[0].attributes["nexus.investigation.id"] == inv_id
@@ -329,51 +328,6 @@ def _ended(app, inv_id: str) -> Callable[[], Awaitable[bool]]:
     return check
 
 
-# -- Poller.stop_one -----------------------------------------------------------------------------
-
-
-async def test_stop_one_without_a_driver_is_a_noop(make_two) -> None:
-    clock = FakeClock(utcnow())
-    app = make_two(held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService(), clock)
-    async with running(app):
-        await runtime(app).poller.stop_one("inv_nothing")  # must not raise
-
-
-async def test_stop_one_from_inside_the_driver_does_not_deadlock(make_two) -> None:
-    clock = FakeClock(utcnow())
-    app = make_two(held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService(), clock)
-    async with running(app):
-        poller = runtime(app).poller
-
-        async def driver() -> None:
-            await poller.stop_one("inv_self")  # awaiting itself would hang forever
-
-        poller._drivers["inv_self"] = asyncio.create_task(driver())
-        await asyncio.wait_for(poller._drivers["inv_self"], timeout=1.0)
-
-
-async def test_stop_one_is_bounded_when_the_driver_ignores_cancel(make_two) -> None:
-    clock = FakeClock(utcnow())
-    app = make_two(held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService(), clock)
-    async with running(app):
-        poller = runtime(app).poller
-        release = asyncio.Event()
-
-        async def stubborn() -> None:
-            while not release.is_set():
-                with contextlib.suppress(asyncio.CancelledError):  # stuck in a step that ignores it
-                    await release.wait()
-
-        poller._drivers["inv_stuck"] = asyncio.create_task(stubborn())
-        await asyncio.sleep(0)
-        started = time.monotonic()
-        await poller.stop_one("inv_stuck")
-        elapsed = time.monotonic() - started
-        release.set()
-
-    assert elapsed < 1.0, elapsed  # bounded by cancel_step_timeout_seconds (0.05), not forever
-
-
 # -- review fixes: in-flight work that lands after the fence -------------------------------------
 
 
@@ -401,6 +355,54 @@ async def test_submit_in_flight_during_cancel_is_cancelled_at_the_agent(make_two
 
     assert sig.log == [f"cancel:{task_id}", f"submit:{task_id}", f"cancel:{task_id}"]
     assert row.status is T.CANCELLED
+
+
+async def test_submit_in_flight_during_route_cancel_is_cancelled_at_the_agent(make_two) -> None:
+    """I1 through the real route. The route does not stop the driver, so the in-flight submit
+    completes, its ack write is dropped (row CANCELLED) and the agent side is cancelled."""
+    clock = FakeClock(utcnow())
+    sig, geo, ctx = held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService()
+    sig.submit_gate = asyncio.Event()
+    app = make_two(sig, geo, ctx, clock)
+    async with running(app) as client:
+        inv_id = await create(client)
+        await wait_until(_entered(sig))
+        task_id = (await by_agent(app, inv_id))[AgentId.SIGINT].id
+
+        resp = await client.post(cancel_url(inv_id))
+        assert resp.status_code == 200, resp.text
+        assert sig.log == [f"cancel:{task_id}"]  # the submit has not landed yet
+
+        sig.submit_gate.set()
+        await wait_until(_log_len(sig, 3))
+        await pump(clock, _driver_gone(app, inv_id))
+        row = (await by_agent(app, inv_id))[AgentId.SIGINT]
+
+    assert sig.log == [f"cancel:{task_id}", f"submit:{task_id}", f"cancel:{task_id}"]
+    assert row.status is T.CANCELLED
+
+
+async def test_driver_exits_at_its_next_tick_after_cancel(make_two) -> None:
+    """No stop call: the driver sees a non-RUNNING investigation and leaves on its own."""
+    clock = FakeClock(utcnow())
+    sig, geo, ctx = held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService()
+    app = make_two(sig, geo, ctx, clock)
+    async with running(app) as client:
+        inv_id = await create(client)
+        await pump(clock, both_running(app, inv_id))
+        assert inv_id in runtime(app).poller.active()
+
+        assert (await client.post(cancel_url(inv_id))).status_code == 200
+        await pump(clock, _driver_gone(app, inv_id))
+
+    assert inv_id not in runtime(app).poller.active()
+
+
+def _driver_gone(app, inv_id: str) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        return inv_id not in runtime(app).poller.active()
+
+    return check
 
 
 def _entered(agent: FakeAgent) -> Callable[[], Awaitable[bool]]:
