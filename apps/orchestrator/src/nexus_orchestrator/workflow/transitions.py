@@ -29,6 +29,7 @@ class IllegalTransition(ValueError):
 
 
 # FR-122: one dispatch plus at most one re-dispatch per task.
+FIRST_ATTEMPT = 1
 MAX_ATTEMPTS = 2
 
 

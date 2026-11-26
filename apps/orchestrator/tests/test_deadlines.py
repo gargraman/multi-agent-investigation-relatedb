@@ -8,74 +8,32 @@ counting event-loop yields. ``FakeAgent`` is a double at the HTTP boundary.
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from orch_testkit import (
-    SCENARIO,
     FakeAgent,
     FakeClock,
     FakeContextService,
     S,
+    create,
+    events,
+    parked,
+    pump,
     running,
     runtime,
+    task_in,
+    the_task,
     wait_until,
 )
 
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.states import OrchestratorTaskState as T
-from nexus_contracts.events.timeline import TimelineEvent
 from nexus_orchestrator.ids import utcnow
 from nexus_orchestrator.state.repository import TaskRecord
 from nexus_orchestrator.workflow.deadlines import expired
 
 TASK_DEADLINE_SECONDS = 180.0
-
-
-async def create(client) -> str:
-    resp = await client.post("/api/v1/investigations", json={"scenario_id": SCENARIO})
-    assert resp.status_code == 201, resp.text
-    return resp.json()["id"]
-
-
-async def the_task(app, inv_id: str) -> TaskRecord:
-    [task] = await runtime(app).repo.task_records(inv_id)
-    return task
-
-
-async def events(client, inv_id: str, type_: str) -> list[TimelineEvent]:
-    resp = await client.get(f"/api/v1/investigations/{inv_id}/timeline", params={"limit": 100})
-    return [TimelineEvent.model_validate(e) for e in resp.json()["items"] if e["type"] == type_]
-
-
-async def parked(clock: FakeClock) -> None:
-    """Wait until the driver has finished its tick and is sleeping on the clock again."""
-
-    async def sleeping() -> bool:
-        return clock.pending() >= 1
-
-    await wait_until(sleeping)
-
-
-def task_in(app, inv_id: str, *states: T) -> Callable[[], Awaitable[bool]]:
-    async def check() -> bool:
-        return (await the_task(app, inv_id)).status in states
-
-    return check
-
-
-async def pump(
-    clock: FakeClock, predicate: Callable[[], Awaitable[bool]], step: float = 0.01
-) -> None:
-    """Advance virtual time in small steps (real pauses between them for the DB threads) until
-    ``predicate`` holds."""
-    end = time.monotonic() + 5.0
-    while not await predicate():
-        if time.monotonic() > end:
-            raise AssertionError("condition not met in time")
-        clock.advance(step)
-        await asyncio.sleep(0.005)
 
 
 # -- the pure helper ---------------------------------------------------------------------------
@@ -119,6 +77,7 @@ def test_expired_selects_open_tasks_at_or_past_their_deadline() -> None:
 async def test_running_task_times_out_at_deadline(make_app, exporter) -> None:
     clock = FakeClock(utcnow())
     agent = FakeAgent(script=[S.WORKING])  # acks, then stays RUNNING forever
+    agent.ready = False  # no re-dispatch (S3b-7): the task stays TIMED_OUT where we look at it
     app = make_app(FakeContextService(), agent, clock=clock)
     async with running(app) as client:
         inv_id = await create(client)
@@ -144,6 +103,7 @@ async def test_pending_unreachable_task_times_out_without_cancel(make_app) -> No
     clock = FakeClock(utcnow())
     agent = FakeAgent()
     agent.up = False
+    agent.ready = False  # no re-dispatch (S3b-7): the task stays TIMED_OUT where we look at it
     app = make_app(FakeContextService(), agent, clock=clock)
     async with running(app) as client:
         inv_id = await create(client)
@@ -169,6 +129,7 @@ async def test_timeout_visible_within_one_tick(make_app) -> None:
     no later than one poll interval (+ jitter) after the deadline, and never before it."""
     clock = FakeClock(utcnow())
     agent = FakeAgent(script=[S.WORKING])
+    agent.ready = False  # no re-dispatch (S3b-7): the task stays TIMED_OUT where we look at it
     app = make_app(
         FakeContextService(), agent, clock=clock, poll_interval_seconds=2.0, poll_jitter_ratio=0.2
     )
@@ -226,7 +187,14 @@ async def test_timeout_loses_race_to_completion(make_app) -> None:
 async def test_cancel_failure_does_not_undo_the_timeout(make_app) -> None:
     clock = FakeClock(utcnow())
     agent = FakeAgent(script=[S.WORKING])
-    app = make_app(FakeContextService(), agent, clock=clock)
+    # The investigation deadline equals the task deadline, so the retry window (FR-121) is closed
+    # at once and the investigation ends on the same tick as the timeout.
+    app = make_app(
+        FakeContextService(),
+        agent,
+        clock=clock,
+        investigation_deadline_seconds=TASK_DEADLINE_SECONDS,
+    )
     async with running(app) as client:
         inv_id = await create(client)
         await wait_until(task_in(app, inv_id, T.RUNNING))

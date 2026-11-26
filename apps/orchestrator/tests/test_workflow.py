@@ -207,14 +207,16 @@ async def test_rejected_on_submit_fails_task_with_task_rejected(make_app) -> Non
 async def test_agent_losing_the_task_fails_it_with_task_lost(make_app) -> None:
     agent = FakeAgent()
     agent.hold = True
+    agent.ready = False  # S3b: with a ready agent the task would be re-dispatched (test_redispatch)
     app = make_app(FakeContextService(), agent)
     async with running(app) as client:
         inv = await create(client)
         await until_task(client, inv.id, "DISPATCHED")
         agent.forget()  # the agent restarted and lost its in-memory state
-        done = await until_status(client, inv.id, TERMINAL)
+        await until_task(client, inv.id, "FAILED")
+        done = await detail(client, inv.id)
     assert done.tasks[0].status == "FAILED" and done.tasks[0].error_code == "task_lost"
-    assert done.status == "FAILED"  # no re-dispatch in S2 (S3 scope)
+    assert done.status == "RUNNING"  # held open by the retry wait window (FR-121a)
 
 
 async def test_no_enabled_agent_fails_inside_create(make_app) -> None:

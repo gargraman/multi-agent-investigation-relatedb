@@ -33,12 +33,15 @@ from nexus_contracts.a2a.task import (
     TaskUsage,
 )
 from nexus_contracts.api.errors import ErrorCode
+from nexus_contracts.api.states import OrchestratorTaskState as T
 from nexus_contracts.common import AgentId, Classification, LlmMode
+from nexus_contracts.events.timeline import TimelineEvent
 from nexus_orchestrator.api.runtime import Runtime
 from nexus_orchestrator.clock import Clock
 from nexus_orchestrator.ids import utcnow
 from nexus_orchestrator.main import create_app
 from nexus_orchestrator.settings import OrchestratorSettings
+from nexus_orchestrator.state.repository import TaskRecord
 from nexus_shared.telemetry import build_tracer_provider
 from nexus_shared.testing import InMemorySpanExporter
 
@@ -169,6 +172,8 @@ class FakeAgent:
       404 for unknown ids (``forget()`` simulates an agent that lost its state).
     - ``POST /v1/tasks/{id}/cancel``: records the id in ``cancels``; the scripted status is left
       alone (the orchestrator has already moved on, which is what the tests look at).
+    - ``GET /readyz``: 200, or 503 while ``ready = False`` (the re-dispatch gate, FR-121).
+    - ``reply_attempt`` makes poll results claim another attempt (a late reply from attempt 1).
     - ``up = False`` makes every request a connect error; ``lose_response = True`` lets the
       agent process the request, then drops the reply (a read error), as after a network cut.
     """
@@ -181,12 +186,17 @@ class FakeAgent:
         script: list[AgentTaskStatus] | None = None,
         submit_status: AgentTaskStatus = S.SUBMITTED,
         fail_code: ErrorCode = ErrorCode.LLM_UNAVAILABLE,
+        usage: tuple[int, int] = (120, 30),
     ) -> None:
         self.agent_id = agent_id
         self.mode = mode
         self.script = list(script if script is not None else [S.WORKING, S.COMPLETED])
         self.submit_status = submit_status
         self.fail_code = fail_code
+        self.usage = usage  # (input, output) tokens reported with a terminal status
+        self.ready = True  # ``GET /readyz``: 200 when True, 503 when False
+        self.readyz_hits = 0
+        self.reply_attempt: int | None = None  # report this attempt instead of the task's own
         self.up = True
         self.lose_response = False
         self.hold = False
@@ -220,13 +230,13 @@ class FakeAgent:
             task_id=task_id,
             agent_id=self.agent_id,
             status=status,
-            attempt=task["attempt"],
+            attempt=self.reply_attempt if self.reply_attempt is not None else task["attempt"],
             llm_mode=self.mode,
             finding_ids=[f"fnd_{suffix}a", f"fnd_{suffix}b"] if status is S.COMPLETED else [],
             usage=(
                 TaskUsage(
-                    input_tokens=120,
-                    output_tokens=30,
+                    input_tokens=self.usage[0],
+                    output_tokens=self.usage[1],
                     llm_calls=2,
                     replayed=self.mode is LlmMode.REPLAY,
                 )
@@ -247,6 +257,12 @@ class FakeAgent:
     def _build(self) -> FastAPI:
         app = FastAPI()
         fake = self
+
+        @app.get("/readyz")
+        async def readyz() -> JSONResponse:
+            fake.readyz_hits += 1
+            code = 200 if fake.ready else 503
+            return JSONResponse({"status": "ready" if fake.ready else "starting"}, status_code=code)
 
         @app.get("/.well-known/agent-card.json")
         async def card() -> dict:
@@ -345,6 +361,51 @@ async def wait_until(
         if time.monotonic() > end:
             raise AssertionError("condition not met in time")
         await asyncio.sleep(interval)
+
+
+async def create(client) -> str:
+    resp = await client.post("/api/v1/investigations", json={"scenario_id": SCENARIO})
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+async def the_task(app, inv_id: str) -> TaskRecord:
+    [task] = await runtime(app).repo.task_records(inv_id)
+    return task
+
+
+async def events(client, inv_id: str, type_: str) -> list[TimelineEvent]:
+    resp = await client.get(f"/api/v1/investigations/{inv_id}/timeline", params={"limit": 100})
+    return [TimelineEvent.model_validate(e) for e in resp.json()["items"] if e["type"] == type_]
+
+
+async def parked(clock: FakeClock) -> None:
+    """Wait until the driver has finished its tick and is sleeping on the clock again."""
+
+    async def sleeping() -> bool:
+        return clock.pending() >= 1
+
+    await wait_until(sleeping)
+
+
+def task_in(app, inv_id: str, *states: T) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        return (await the_task(app, inv_id)).status in states
+
+    return check
+
+
+async def pump(
+    clock: FakeClock, predicate: Callable[[], Awaitable[bool]], step: float = 0.01
+) -> None:
+    """Advance virtual time in small steps (real pauses between them for the DB threads) until
+    ``predicate`` holds."""
+    end = time.monotonic() + 5.0
+    while not await predicate():
+        if time.monotonic() > end:
+            raise AssertionError("condition not met in time")
+        clock.advance(step)
+        await asyncio.sleep(0.005)
 
 
 @pytest.fixture

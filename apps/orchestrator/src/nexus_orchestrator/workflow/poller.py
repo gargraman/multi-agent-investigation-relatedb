@@ -33,11 +33,13 @@ import json
 import logging
 import random
 from collections.abc import Callable
+from datetime import datetime, timedelta
 
 from opentelemetry import propagate
 from opentelemetry.trace import Tracer
 
 from nexus_contracts.a2a.status_mapping import (
+    REDISPATCHABLE_CODES,
     PollFailure,
     TaskStateUpdate,
     map_poll_outcome,
@@ -54,9 +56,15 @@ from nexus_orchestrator.delegation.agent_client import AgentClient
 from nexus_orchestrator.scenarios import ScenarioCatalog
 from nexus_orchestrator.settings import OrchestratorSettings
 from nexus_orchestrator.state.db import Database
-from nexus_orchestrator.state.repository import Applied, Repository, TaskRecord
+from nexus_orchestrator.state.repository import (
+    Applied,
+    InvestigationRecord,
+    Repository,
+    TaskRecord,
+)
 from nexus_orchestrator.workflow import deadlines, terminal
 from nexus_orchestrator.workflow.dispatch import Dispatcher, stored_carrier
+from nexus_orchestrator.workflow.transitions import FIRST_ATTEMPT
 
 log = logging.getLogger(__name__)
 
@@ -72,14 +80,27 @@ def skipped_agents(manifest: ScenarioManifest | None, tasks: list[TaskRecord]) -
 
 
 def outcomes_in_template_order(
-    manifest: ScenarioManifest | None, tasks: list[TaskRecord]
+    manifest: ScenarioManifest | None,
+    tasks: list[TaskRecord],
+    investigation_deadline: datetime,
+    now: datetime,
+    settings: OrchestratorSettings,
 ) -> list[terminal.TaskOutcome]:
     """Task outcomes ordered by their agent's manifest-template index (FR-124); a task whose
-    agent is not in the template goes last. ``retry_open`` is wired in by the retry task (S3b-7)."""
+    agent is not in the template goes last. A task whose re-dispatch window is still open is
+    ``retry_open``, so the investigation is not finished before attempt 2 can start (FR-121a)."""
     order = [t.agent for t in manifest.template.tasks] if manifest is not None else []
     rank = {agent: i for i, agent in enumerate(order)}
     ordered = sorted(tasks, key=lambda t: rank.get(t.agent_id, len(order)))  # stable
-    return [terminal.TaskOutcome(t.agent_id, t.status, t.status_reason, False) for t in ordered]
+    return [
+        terminal.TaskOutcome(
+            t.agent_id,
+            t.status,
+            t.status_reason,
+            deadlines.retry_window_open(t, investigation_deadline, now, settings),
+        )
+        for t in ordered
+    ]
 
 
 class Poller:
@@ -105,6 +126,7 @@ class Poller:
         self.tracer = tracer
         self.is_leader = is_leader
         self._drivers: dict[str, asyncio.Task[None]] = {}
+        self._no_reservation_logged: set[str] = set()  # log "nothing to retry with" once per task
         self.polls = 0  # observability for tests: number of GET /v1/tasks issued
         self._stopped = False
 
@@ -160,17 +182,29 @@ class Poller:
                             )
                     tasks = await self.repo.task_records(investigation_id)
                     # Tick order: (1) investigation deadline [S3b-8], (2) task deadlines,
-                    # (3) re-dispatch [S3b-7], then dispatch, poll, finish.
+                    # (3) re-dispatch (FR-121), then dispatch, poll, finish.
                     due = deadlines.expired(tasks, self.clock.now())
                     if due:
                         await asyncio.gather(*(self._time_out(t) for t in due))
                         tasks = await self.repo.task_records(investigation_id)
-                    if not dispatched and manifest is not None:
-                        pending = [t for t in tasks if t.status is OrchestratorTaskState.PENDING]
+                    retry = [t for t in tasks if deadlines.retry_eligible(t)]
+                    if retry and manifest is not None:
+                        await asyncio.gather(*(self._redispatch(t, inv, manifest) for t in retry))
+                        tasks = await self.repo.task_records(investigation_id)
+                    if manifest is not None:
+                        # First leader tick: every PENDING task (a resume re-POSTs, F2). After
+                        # that only a re-dispatched one (attempt > 1): a first-attempt task the
+                        # agent could not be reached for stays PENDING until its deadline (G13).
+                        pending = [
+                            t
+                            for t in tasks
+                            if t.status is OrchestratorTaskState.PENDING
+                            and (not dispatched or t.attempt > FIRST_ATTEMPT)
+                        ]
                         await asyncio.gather(
                             *(self.dispatcher.dispatch(inv, t, manifest) for t in pending)
                         )
-                        dispatched = self.is_leader()  # lost it mid-way: retry next tick
+                        dispatched = dispatched or self.is_leader()  # lost it mid-way: retry
                         tasks = await self.repo.task_records(investigation_id)
                     polled = [t for t in tasks if t.status in POLLED_STATES]
                     await asyncio.gather(
@@ -188,6 +222,17 @@ class Poller:
         self.polls += 1
         outcome = await self.agents.get_task(task.agent_id, task.id, task.attempt)
         result = outcome if isinstance(outcome, TaskResult) else None
+        if result is not None and result.attempt != task.attempt:
+            # A late reply from an earlier attempt must not move the current one (FR-122).
+            log.debug(
+                "ignoring a result for another attempt",
+                extra={
+                    "task_id": task.id,
+                    "attempt": task.attempt,
+                    "result_attempt": result.attempt,
+                },
+            )
+            return
         update: TaskStateUpdate = (
             map_task_result(outcome)
             if isinstance(outcome, TaskResult)
@@ -225,6 +270,105 @@ class Poller:
                 except Exception:
                     log.warning("agent cancel failed", extra={"task_id": task.id}, exc_info=True)
 
+    def _note_no_reservation(self, task: TaskRecord, reservation: int) -> None:
+        """Attempt 1 used the whole share: there is nothing to retry with, so the task stays
+        final. Said once per task (the tick that failed it, or a later one), not once per tick."""
+        if task.id in self._no_reservation_logged:
+            return
+        self._no_reservation_logged.add(task.id)
+        log.warning(
+            "no token reservation left for attempt 2; task stays final",
+            extra={
+                "task_id": task.id,
+                "investigation_id": task.investigation_id,
+                "reservation": reservation,
+            },
+        )
+
+    async def _redispatch(
+        self, task: TaskRecord, inv: InvestigationRecord, manifest: ScenarioManifest
+    ) -> None:
+        """FR-121: a retry-eligible ``task`` goes back to PENDING as attempt 2, if its wait window
+        is open, it has a reservation left and the agent's ``/readyz`` is green. The same tick's
+        dispatch step then POSTs it. Otherwise nothing is written; the next tick asks again until
+        the window closes, after which the task is final.
+
+        The readiness await is outside any transaction. Afterwards the task and the investigation
+        are re-read, so a write that landed meanwhile (an investigation cancel, a terminal write)
+        wins and the re-dispatch is dropped."""
+        if self.clock.now() >= deadlines.retry_window_end(task, inv.deadline, self.settings):
+            return
+        template = next((t for t in manifest.template.tasks if t.agent is task.agent_id), None)
+        if template is None:
+            return
+        reservation = deadlines.attempt2_reservation(
+            template.token_share,
+            self.settings.nexus_max_tokens_per_investigation,
+            task.usage_tokens,
+        )
+        if reservation <= 0:
+            self._note_no_reservation(task, reservation)
+            return
+        attrs = {
+            "nexus.investigation.id": task.investigation_id,
+            "nexus.task.id": task.id,
+            "nexus.task.attempt": task.attempt,
+            "nexus.agent.id": task.agent_id.value,
+        }
+        parent = propagate.extract(stored_carrier(inv.trace_context_json))
+        with self.tracer.start_as_current_span(
+            "workflow.redispatch", context=parent, attributes=attrs
+        ) as span:
+            if not await self.agents.ready(task.agent_id):
+                span.set_attribute("nexus.redispatch.outcome", "not_ready")
+                return
+            now = self.clock.now()
+            async with self.db.transaction() as tx:
+                fresh_inv = await self.repo.tx_investigation_record(tx, inv.id)
+                fresh = next(
+                    (t for t in await self.repo.tx_task_records(tx, inv.id) if t.id == task.id),
+                    None,
+                )
+                if (
+                    fresh_inv is None
+                    or fresh_inv.status is not InvestigationStatus.RUNNING
+                    or fresh is None
+                    or fresh.attempt != task.attempt
+                    or now >= deadlines.retry_window_end(fresh, inv.deadline, self.settings)
+                ):
+                    span.set_attribute("nexus.redispatch.outcome", "dropped")
+                    return
+                attempt = fresh.attempt + 1
+                applied = await self.repo.transition_task(
+                    tx,
+                    fresh,
+                    OrchestratorTaskState.PENDING,
+                    now=now,
+                    fields={
+                        "attempt": attempt,
+                        "deadline": min(
+                            now + timedelta(seconds=self.settings.task_deadline_seconds),
+                            inv.deadline,
+                        ),
+                        "token_reservation": reservation,
+                        # attempt 1's outcome must not linger on the attempt-2 row
+                        "error_code": None,
+                        "error_category": None,
+                        "acked_at": None,
+                    },
+                )
+            span.set_attribute("nexus.redispatch.outcome", applied.value)
+        if applied is Applied.APPLIED:
+            log.info(
+                "task re-dispatched",
+                extra={
+                    "task_id": task.id,
+                    "investigation_id": task.investigation_id,
+                    "attempt": attempt,
+                    "reservation": reservation,
+                },
+            )
+
     async def _record(
         self,
         task: TaskRecord,
@@ -237,7 +381,7 @@ class Poller:
         if (
             to is OrchestratorTaskState.FAILED
             and update.reason is ErrorCode.DEADLINE_EXCEEDED
-            and task.attempt == 1
+            and task.attempt == FIRST_ATTEMPT
         ):
             to = OrchestratorTaskState.TIMED_OUT  # FR-121b: an agent-reported timeout is a timeout
         fields: dict[str, object] = {}
@@ -265,6 +409,10 @@ class Poller:
                 applied = await self.repo.transition_task(
                     tx, task, to, now=now, reason=update.reason, fields=fields
                 )
+                if applied is Applied.APPLIED and self._retry_candidate(task, to, update.reason):
+                    spent = result.usage.total_tokens if result and result.usage else 0
+                    if task.token_reservation - spent <= 0:  # same figure as the window check
+                        self._note_no_reservation(task, task.token_reservation - spent)
                 if applied is not Applied.APPLIED or not to.is_terminal or result is None:
                     return applied
                 usage = result.usage
@@ -286,11 +434,27 @@ class Poller:
                         )
         return applied
 
+    @staticmethod
+    def _retry_candidate(
+        task: TaskRecord, to: OrchestratorTaskState, reason: ErrorCode | None
+    ) -> bool:
+        """Would ``task`` be retry-eligible (FR-121) once it moves to ``to`` with ``reason``?"""
+        if task.attempt != FIRST_ATTEMPT:
+            return False
+        return to is OrchestratorTaskState.TIMED_OUT or (
+            to is OrchestratorTaskState.FAILED and reason in REDISPATCHABLE_CODES
+        )
+
     async def _maybe_finish(self, investigation_id: str, manifest: ScenarioManifest | None) -> bool:
         """Apply the terminal rule if every task is terminal. True when the driver can exit."""
+        record = await self.repo.investigation_record(investigation_id)
+        if record is None:
+            return True
         tasks = await self.repo.task_records(investigation_id)
-        skipped = skipped_agents(manifest, tasks)
-        if terminal.decide(outcomes_in_template_order(manifest, tasks), skipped) is None:
+        outcomes = outcomes_in_template_order(
+            manifest, tasks, record.deadline, self.clock.now(), self.settings
+        )
+        if terminal.decide(outcomes, skipped_agents(manifest, tasks)) is None:
             return False
         async with self.db.transaction() as tx:
             inv = await self.repo.tx_investigation_record(tx, investigation_id)
@@ -298,7 +462,10 @@ class Poller:
                 return True
             fresh = await self.repo.tx_task_records(tx, investigation_id)
             decision = terminal.decide(
-                outcomes_in_template_order(manifest, fresh), skipped_agents(manifest, fresh)
+                outcomes_in_template_order(
+                    manifest, fresh, inv.deadline, self.clock.now(), self.settings
+                ),
+                skipped_agents(manifest, fresh),
             )
             if decision is None:
                 return False

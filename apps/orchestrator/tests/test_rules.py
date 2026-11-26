@@ -7,7 +7,7 @@ The expected tables are written out again here on purpose, as an independent cop
 from __future__ import annotations
 
 import itertools
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from orch_testkit import SCENARIO, SCENARIOS_DIR
@@ -201,6 +201,11 @@ def test_unknown_reason_string_falls_back() -> None:
     assert decision == terminal.TerminalDecision(I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)
 
 
+RECORD_UPDATED = datetime(2026, 1, 1, tzinfo=UTC)
+NOW = RECORD_UPDATED + timedelta(days=30)  # long after any retry window of ``_record`` rows
+FAR = RECORD_UPDATED + timedelta(days=365)  # investigation deadline
+
+
 def _record(agent: AgentId, state: T, reason: str | None = None) -> TaskRecord:
     return TaskRecord(
         id=f"tsk_{agent.value}",
@@ -211,14 +216,14 @@ def _record(agent: AgentId, state: T, reason: str | None = None) -> TaskRecord:
         status_reason=reason,
         attempt=1,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
-        token_reservation=0,
+        token_reservation=1000,
         acked_at=None,
         version=1,
-        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=RECORD_UPDATED,
     )
 
 
-def test_outcomes_follow_manifest_template_order() -> None:
+def test_outcomes_follow_manifest_template_order(make_settings) -> None:
     full = load_manifest(SCENARIOS_DIR / SCENARIO)
     sig_geo = [t for t in full.template.tasks if t.agent in (SIG, GEO)]
     assert [t.agent for t in sig_geo] == [SIG, GEO]  # the premise of this test
@@ -231,7 +236,7 @@ def test_outcomes_follow_manifest_template_order() -> None:
         _record(GEO, T.FAILED, ErrorCode.TASK_LOST.value),
         _record(SIG, T.TIMED_OUT, ErrorCode.DEADLINE_EXCEEDED.value),
     ]
-    outcomes = outcomes_in_template_order(manifest, records)
+    outcomes = outcomes_in_template_order(manifest, records, FAR, NOW, make_settings())
     assert [x.agent_id for x in outcomes] == [SIG, GEO, ANA]
     assert [x.reason for x in outcomes] == [ErrorCode.DEADLINE_EXCEEDED.value, "task_lost", None]
     assert [x.state for x in outcomes] == [T.TIMED_OUT, T.FAILED, T.COMPLETED]
@@ -242,11 +247,29 @@ def test_outcomes_follow_manifest_template_order() -> None:
     )
 
 
-def test_outcomes_without_a_manifest_keep_input_order() -> None:
+def test_outcomes_without_a_manifest_keep_input_order(make_settings) -> None:
     records = [_record(GEO, T.COMPLETED), _record(SIG, T.FAILED, "task_lost")]
-    outcomes = outcomes_in_template_order(None, records)
+    outcomes = outcomes_in_template_order(None, records, FAR, NOW, make_settings())
     assert [x.agent_id for x in outcomes] == [GEO, SIG]
     assert outcomes[1].reason == "task_lost" and not outcomes[1].retry_open
+
+
+def test_outcomes_mark_a_task_with_an_open_retry_window_retry_open(make_settings) -> None:
+    settings = make_settings()
+    records = [
+        _record(SIG, T.TIMED_OUT, ErrorCode.DEADLINE_EXCEEDED.value),
+        _record(GEO, T.COMPLETED),
+    ]
+    soon = RECORD_UPDATED + timedelta(seconds=10)  # inside the 180 s window
+    open_ = outcomes_in_template_order(None, records, FAR, soon, settings)
+    assert [x.retry_open for x in open_] == [True, False]
+    assert terminal.decide(open_, []) is None  # FR-121a: the investigation is not finished
+    # investigation deadline closes it sooner than the 180 s
+    capped = outcomes_in_template_order(
+        None, records, RECORD_UPDATED + timedelta(seconds=5), soon, settings
+    )
+    assert not any(x.retry_open for x in capped)
+    assert terminal.decide(capped, []) is not None
 
 
 # -- settings ---------------------------------------------------------------------------------
