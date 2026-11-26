@@ -55,7 +55,7 @@ services:
       SQLITE_PATH: /data/orchestrator.sqlite
       SCENARIOS_DIR: /app/data/scenarios
       # S1: nothing leaves CREATED until the workflow lands (S3), so the spec default of 2 would
-      # block the third create. Restore the default of 2 in S3.
+      # block the third create. Restoring the default of 2 is deferred to S3b.
       NEXUS_MAX_CONCURRENT_INVESTIGATIONS: ${NEXUS_MAX_CONCURRENT_INVESTIGATIONS:-20}
       NEXUS_ENABLED_AGENTS: sigint-agent,geoint-agent
       NEXUS_AGENT_URLS: '{"sigint-agent":"http://sigint-agent:8000","geoint-agent":"http://geoint-agent:8000"}'

@@ -103,7 +103,7 @@ AC3: one investigation delegates to two independent agents, visible in one trace
 
 | ID | Requirement | Source |
 |---|---|---|
-| FR-100 | Move the generic parts of `nexus_sigint/{api,store,runner,context_client,main,settings}.py` into `nexus_shared.agent`. An agent package provides an `AgentSpec`: `agent_id`, `task_types`, `fixture_schema`, `run(request, provider, manifest, fixtures_root, budget) -> PipelineOutcome`, `card_skills`. `create_agent_app(spec, settings)` builds the FastAPI app | Decision 1 |
+| FR-100 | Move the generic parts of `nexus_sigint/{api,store,runner,context_client,main,settings}.py` into `nexus_shared.agent`. An agent package provides an `AgentSpec`: `agent_id`, `task_types`, `role` (agent card text), `version`, `clearance` (agent card; must equal the Context Service `CLEARANCE` table), `validate_request(request, manifest) -> ErrorCode | None` (submit-time policy check), `run(request, *, provider, manifest, fixtures_root, budget, tracer) -> PipelineOutcome`. `create_agent_app(spec, settings)` builds the FastAPI app | Decision 1 |
 | FR-101 | Behaviour-preserving: every S2 SIGINT test passes unchanged except for import paths. The S2 replay recordings still hit (the prompt and key material are unchanged) | Refactor safety |
 | FR-102 | `POST /v1/tasks/{id}/cancel` (orchestrator token only). SUBMITTED/WORKING → sets `cancel_requested`; the runner observes it before each LLM call and before the commit, and cancels an in-flight LLM call via asyncio. The attempt ends `CANCELED`. Terminal → 200 with the current status (idempotent). Unknown → 404 | §8.3, §8.6 |
 | FR-103 | A commit that has started is not interrupted. If the Context Service answers 409 `investigation_cancelled`, the attempt ends `CANCELED` (not FAILED) | §8.3, §8.6 |
@@ -213,7 +213,7 @@ Every arrow is one SQLite transaction plus one timeline row, version-guarded (AD
 
 ## 10. Security and privacy
 
-- `geoint-agent` mounts only `fixtures/geoint` and `data/replay/geoint-agent` (AC5 lint extended).
+- `geoint-agent` mounts its own state volume, `data/fixtures/geoint` and `data/replay/geoint-agent`, plus `data/scenarios` read-only (manifests, needed for alias resolution). Scenario manifests carry the `oracle` block; no agent code reads it, and an oracle-free agent projection of the manifest is an S3b item. The AC5 lint pins an exact per-agent allowlist of mount sources.
 - Agent cancel accepts only the orchestrator token.
 - GEOINT stored summaries follow the S2 N11 rule. The `sensor` field and `summary` free text never reach the graph.
 - The `ev-geo-005` injection ("relocate to LOC-GRID-00", tripwire G2L) must not move any assertion: graph facts come from the detector only.
