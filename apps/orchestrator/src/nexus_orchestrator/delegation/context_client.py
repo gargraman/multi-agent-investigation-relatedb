@@ -19,10 +19,13 @@ from opentelemetry.sdk.trace import TracerProvider
 from pydantic import ValidationError
 
 from nexus_contracts.api.context import (
+    ContextInvestigationClose,
     ContextInvestigationCreate,
     ContextInvestigationCreated,
     InvestigationContext,
 )
+from nexus_contracts.api.errors import ErrorCode
+from nexus_contracts.api.states import InvestigationStatus
 from nexus_shared.telemetry import instrument_client
 
 log = logging.getLogger(__name__)
@@ -122,6 +125,30 @@ class ContextServiceClient:
             return ContextRead(None, 404, "not registered with the Context Service")
         return ContextRead(
             None, 503 if resp.status_code >= 500 else 502, f"HTTP {resp.status_code}"
+        )
+
+    async def close(
+        self, investigation_id: str, status: InvestigationStatus, *, timeout: float
+    ) -> bool:
+        """``POST /v1/investigations/{id}/close``: fence the investigation at the Context Service.
+
+        True when it is closed or there is nothing left to fence: 200, 409
+        ``investigation_cancelled`` (already closed), 404 (never registered). Anything else,
+        including a transport failure, is False. Never raises; the caller retries or defers to
+        the reconciler."""
+        try:
+            resp = await self._client.post(
+                f"/v1/investigations/{investigation_id}/close",
+                json=ContextInvestigationClose(status=status).model_dump(mode="json"),
+                timeout=timeout,
+            )
+        except httpx.HTTPError:
+            return False
+        if resp.status_code in (200, 404):
+            return True
+        return (
+            resp.status_code == 409
+            and _problem_code(resp) == ErrorCode.INVESTIGATION_CANCELLED.value
         )
 
     async def readyz(self) -> tuple[bool, str]:

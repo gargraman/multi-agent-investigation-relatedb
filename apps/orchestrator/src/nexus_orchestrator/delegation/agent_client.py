@@ -90,6 +90,7 @@ class AgentClient:
         transport: httpx.AsyncBaseTransport | None = None,
         tracer_provider: TracerProvider | None = None,
     ) -> None:
+        self._probe_timeout = probe_timeout
         self._urls = {agent: url.rstrip("/") for agent, url in urls.items()}
         auth = {"Authorization": f"Bearer {token}"}
         # OTel's instrument_client patches the client's *transport instance*. Each client gets its
@@ -180,6 +181,32 @@ class AgentClient:
         if card.id != agent:
             return CardOutcome(None, f"card id {card.id} does not match {agent}")
         return CardOutcome(card, "ok")
+
+    async def ready(self, agent: AgentId) -> bool:
+        """``GET /readyz`` (unauthenticated, uninstrumented like ``card``). True only on 200;
+        never raises: an unknown agent, connect error, timeout or 5xx is simply not ready."""
+        if agent not in self._urls:
+            return False
+        try:
+            resp = await self._probe.get(self._url(agent, "/readyz"))
+        except httpx.HTTPError:
+            return False
+        return resp.status_code == 200
+
+    async def cancel(self, agent: AgentId, task_id: str) -> bool:
+        """``POST /v1/tasks/{id}/cancel`` with the orchestrator token, one ``probe_timeout``
+        bound per call (the caller bounds the total). True on 200, or on 404 (the agent no longer
+        knows the task, which is the goal anyway). Never raises. Rides the instrumented submit
+        client so each cancel is its own span and carries ``traceparent``."""
+        if agent not in self._urls:
+            return False
+        try:
+            resp = await self._submit.post(
+                self._url(agent, f"/v1/tasks/{task_id}/cancel"), timeout=self._probe_timeout
+            )
+        except httpx.HTTPError:
+            return False
+        return resp.status_code in (200, 404)
 
 
 def _problem_code(resp: httpx.Response) -> ErrorCode | None:
