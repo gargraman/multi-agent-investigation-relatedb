@@ -3,6 +3,7 @@ FR-122 attempt guard on the re-dispatch edge."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -29,10 +30,48 @@ ENV = {"SERVICE_TOKEN": "t" * 32}
 async def test_fake_clock_sleep_advances() -> None:
     clock = FakeClock(START)
     assert clock.now() == START
-    await clock.sleep(2.5)
+    sleeper = asyncio.create_task(clock.sleep(2.5))
+    await asyncio.sleep(0)
+    assert clock.pending() == 1 and clock.now() == START  # sleeping does not move time
+    clock.advance(2.5)
+    await sleeper
+    assert clock.now() == START + timedelta(seconds=2.5) and clock.pending() == 0
+    await clock.sleep(0)  # zero and negative sleeps just yield
+    await clock.sleep(-3)
     assert clock.now() == START + timedelta(seconds=2.5)
-    clock.advance(10)
-    assert clock.now() == START + timedelta(seconds=12.5)
+
+
+async def test_fake_clock_sleep_blocks_until_advance() -> None:
+    clock = FakeClock(START)
+    sleeper = asyncio.create_task(clock.sleep(5))
+    await asyncio.sleep(0)
+    clock.advance(4)
+    await asyncio.sleep(0)
+    assert not sleeper.done()
+    clock.advance(1)
+    await asyncio.sleep(0)
+    assert sleeper.done()
+
+
+async def test_fake_clock_run_for_wakes_in_order() -> None:
+    clock = FakeClock(START)
+    woke: list[tuple[str, float]] = []
+
+    async def sleeper(name: str, seconds: float, times: int = 1) -> None:
+        for _ in range(times):
+            await clock.sleep(seconds)
+            woke.append((name, (clock.now() - START).total_seconds()))
+
+    tasks = [
+        asyncio.create_task(sleeper("slow", 7)),
+        asyncio.create_task(sleeper("fast", 2, times=3)),  # re-sleeps after each wake
+        asyncio.create_task(sleeper("mid", 4)),
+    ]
+    await asyncio.sleep(0)
+    await clock.run_for(10)
+    await asyncio.gather(*tasks)
+    assert woke == [("fast", 2), ("mid", 4), ("fast", 4), ("fast", 6), ("slow", 7)]
+    assert clock.now() == START + timedelta(seconds=10)
 
 
 def test_settings_min_analysis_tokens_default_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,6 +143,10 @@ async def test_task_record_usage_tokens(repo: Repository) -> None:
     async with repo.db.transaction() as tx:
         await tx.execute("UPDATE tasks SET usage_json = ? WHERE id = ?", (json.dumps(usage), TASK))
     assert (await _current(repo)).usage_tokens == 7
+    for bad in ("null", "[1, 2]", "7", '"x"', "{not json", '{"input_tokens": "a"}'):
+        async with repo.db.transaction() as tx:
+            await tx.execute("UPDATE tasks SET usage_json = ? WHERE id = ?", (bad, TASK))
+        assert (await _current(repo)).usage_tokens is None, bad
 
 
 async def test_redispatch_event_carries_deadline(repo: Repository) -> None:
@@ -130,6 +173,26 @@ async def test_redispatch_event_carries_deadline(repo: Repository) -> None:
     assert datetime.fromisoformat(payload["deadline"]) == new_deadline
     # A transition that does not touch the deadline leaves the field out of the event.
     assert events[-2].payload["deadline"] is None
+
+
+async def test_deadline_field_accepts_datetime_or_iso(repo: Repository) -> None:
+    task = await _seed_task(repo)
+    new_deadline = START + timedelta(minutes=9)
+    async with repo.db.transaction() as tx:
+        await repo.transition_task(
+            tx, task, T.TIMED_OUT, now=START, reason=ErrorCode.DEADLINE_EXCEEDED
+        )
+    async with repo.db.transaction() as tx:
+        await repo.transition_task(
+            tx,
+            await _current(repo),
+            T.PENDING,
+            now=START,
+            fields={"attempt": 2, "deadline": new_deadline},
+        )
+    assert (await _current(repo)).deadline == new_deadline
+    payload = (await repo.events_after(INV, 0, 100))[-1].payload
+    assert datetime.fromisoformat(payload["deadline"]) == new_deadline
 
 
 async def test_pending_requires_attempt_increment(repo: Repository) -> None:
@@ -170,3 +233,18 @@ async def test_pending_requires_attempt_increment(repo: Repository) -> None:
                 tx, await _current(repo), T.PENDING, now=now, fields={"attempt": 3}
             )
     assert (await _current(repo)).attempt == 2
+
+
+async def test_pending_refuses_skipping_an_attempt(repo: Repository) -> None:
+    task = await _seed_task(repo)  # attempt 1
+    async with repo.db.transaction() as tx:
+        await repo.transition_task(
+            tx, task, T.TIMED_OUT, now=START, reason=ErrorCode.DEADLINE_EXCEEDED
+        )
+    with pytest.raises(IllegalTransition):
+        async with repo.db.transaction() as tx:
+            await repo.transition_task(
+                tx, await _current(repo), T.PENDING, now=START, fields={"attempt": 3}
+            )
+    current = await _current(repo)
+    assert current.status is T.TIMED_OUT and current.attempt == 1

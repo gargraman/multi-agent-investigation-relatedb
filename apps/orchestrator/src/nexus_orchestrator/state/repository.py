@@ -60,6 +60,19 @@ class Applied(StrEnum):
     DROPPED = "dropped"  # edge not allowed from the current state: transition.dropped written
 
 
+def _usage_tokens(usage_json: str | None) -> int | None:
+    """``input_tokens + output_tokens`` from a ``usage_json`` blob; None if absent or malformed."""
+    if not usage_json:
+        return None
+    try:
+        usage = json.loads(usage_json)
+        if not isinstance(usage, dict):
+            return None
+        return int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+    except (ValueError, TypeError):
+        return None
+
+
 @dataclass(frozen=True)
 class TaskRecord:
     """Internal view of a ``tasks`` row, including the ``version`` used for compare-and-set."""
@@ -80,7 +93,6 @@ class TaskRecord:
 
     @classmethod
     def from_row(cls, row: aiosqlite.Row) -> TaskRecord:
-        usage = json.loads(row["usage_json"]) if row["usage_json"] else None
         return cls(
             id=row["id"],
             investigation_id=row["investigation_id"],
@@ -94,11 +106,7 @@ class TaskRecord:
             acked_at=row["acked_at"],
             version=row["version"],
             updated_at=parse_iso(row["updated_at"]),
-            usage_tokens=(
-                int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
-                if usage is not None
-                else None
-            ),
+            usage_tokens=_usage_tokens(row["usage_json"]),
         )
 
 
@@ -340,7 +348,9 @@ class Repository:
                 tx, current.investigation_id, "task", current.id, current.status, to, reason, now
             )
             return Applied.DROPPED
-        fields = fields or {}
+        fields = dict(fields or {})
+        if isinstance(fields.get("deadline"), datetime):
+            fields["deadline"] = iso(fields["deadline"])  # the column and the event take ISO text
         attempt = current.attempt
         if to is OrchestratorTaskState.PENDING:
             # FR-122, enforced at the write: a re-dispatch is attempt + 1, and there is only one.

@@ -49,21 +49,64 @@ SCENARIO = "baseline-corroboration"
 
 
 class FakeClock:
-    """Virtual time for the orchestrator's :class:`Clock`. ``sleep`` advances time instead of
-    waiting, then yields once so other tasks run; ``advance`` moves it from the test."""
+    """Virtual time for the orchestrator's :class:`Clock`.
+
+    ``sleep(s)`` blocks until virtual time reaches ``now + s`` (``s <= 0`` just yields). Time only
+    moves when the test calls ``advance`` or ``run_for``, so a driver sleeping on this clock cannot
+    push time forward by itself and deadline tests stay deterministic.
+    """
 
     def __init__(self, start: datetime) -> None:
         self._now = start
+        self._waiters: list[tuple[datetime, int, asyncio.Future[None]]] = []
+        self._seq = 0
 
     def now(self) -> datetime:
         return self._now
 
     async def sleep(self, seconds: float) -> None:
-        self.advance(seconds)
-        await asyncio.sleep(0)
+        if seconds <= 0:
+            await asyncio.sleep(0)
+            return
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._seq += 1
+        entry = (self._now + timedelta(seconds=seconds), self._seq, future)
+        self._waiters.append(entry)
+        try:
+            await future
+        finally:
+            if entry in self._waiters:  # cancelled before it was woken
+                self._waiters.remove(entry)
+
+    def pending(self) -> int:
+        """Number of sleepers still waiting."""
+        return sum(1 for _, _, f in self._waiters if not f.done())
 
     def advance(self, seconds: float) -> None:
+        """Move time forward and wake every sleeper whose target has been reached, in order."""
         self._now += timedelta(seconds=seconds)
+        due = sorted((w for w in self._waiters if w[0] <= self._now), key=lambda w: (w[0], w[1]))
+        for entry in due:
+            self._waiters.remove(entry)
+            if not entry[2].done():
+                entry[2].set_result(None)
+
+    async def run_for(self, seconds: float, step: float | None = None) -> None:
+        """Advance ``seconds`` in steps, letting woken tasks run between steps. The default step
+        is the smallest pending sleep (so a woken driver can re-sleep before time moves on), or
+        ``seconds`` when nothing is sleeping."""
+        end = self._now + timedelta(seconds=seconds)
+        while self._now < end:
+            remaining = (end - self._now).total_seconds()
+            if step is not None:
+                delta = step
+            else:
+                targets = [t for t, _, f in self._waiters if not f.done()]
+                delta = (min(targets) - self._now).total_seconds() if targets else seconds
+            self.advance(min(max(delta, 1e-6), remaining))
+            for _ in range(5):
+                await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
 
 class FakeContextService:
