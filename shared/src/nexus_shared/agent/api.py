@@ -32,7 +32,6 @@ from nexus_contracts.a2a.task import (
 )
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
-from nexus_contracts.common import Classification
 from nexus_shared.agent.catalog import ManifestCatalog
 from nexus_shared.agent.runner import TaskRunner
 from nexus_shared.agent.settings import AgentSettings
@@ -145,7 +144,7 @@ def agent_card(spec: AgentSpec, settings: AgentSettings) -> AgentCard:
         role=spec.role,
         task_types=list(spec.task_types),
         version=spec.version,
-        clearance=Classification.DEMO_HIGH,
+        clearance=spec.clearance,
         llm_mode=settings.nexus_llm_mode,
     )
 

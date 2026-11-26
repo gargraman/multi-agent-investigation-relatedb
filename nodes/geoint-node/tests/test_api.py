@@ -62,6 +62,7 @@ async def test_api_card_and_submit(tmp_path: Path) -> None:
         card = (await c.get("/.well-known/agent-card.json")).json()
         assert card["id"] == "geoint-agent" and card["llm_mode"] == "replay"
         assert card["task_types"] == ["analyze_synthetic_geospatial"]
+        assert card["clearance"] == "DEMO-MID"
         assert (await c.post("/v1/tasks", json={})).status_code == 401
 
         body = make_request().model_dump(mode="json")

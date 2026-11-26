@@ -13,7 +13,7 @@ from opentelemetry import trace
 
 from nexus_contracts.a2a.task import TaskRequest
 from nexus_contracts.api.errors import ErrorCode
-from nexus_contracts.common import AgentId
+from nexus_contracts.common import AgentId, Classification
 from nexus_contracts.scenario.manifest import ScenarioManifest
 from nexus_geoint import __version__, pipeline
 from nexus_shared.agent.spec import AgentSpec, PipelineOutcome
@@ -26,6 +26,7 @@ class GeointSpec:
     task_types: tuple[str, ...] = pipeline.TASK_TYPES
     role: str = "GEOINT specialist: co-located and conflicting placements in synthetic sightings"
     version: str = __version__
+    clearance: Classification = Classification.DEMO_MID  # = Context Service CLEARANCE
 
     def validate_request(
         self, request: TaskRequest, manifest: ScenarioManifest | None

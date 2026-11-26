@@ -17,7 +17,7 @@ from opentelemetry import trace
 from nexus_contracts.a2a.task import AgentTaskStatus, TaskError, TaskRequest, TaskUsage
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.findings import FindingBatchRequest
-from nexus_contracts.common import AgentId
+from nexus_contracts.common import AgentId, Classification
 from nexus_contracts.scenario.manifest import ScenarioManifest
 from nexus_shared.llm import LLMProvider, TokenBudget
 
@@ -48,6 +48,7 @@ class AgentSpec(Protocol):
     task_types: tuple[str, ...]
     role: str  # agent card text
     version: str  # agent package version (agent card, OpenAPI)
+    clearance: Classification  # agent card; must match the Context Service CLEARANCE table
 
     def validate_request(
         self, request: TaskRequest, manifest: ScenarioManifest | None

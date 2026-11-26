@@ -132,6 +132,7 @@ async def test_auth_and_public_endpoints(env) -> None:
     card = (await c.get("/.well-known/agent-card.json")).json()
     assert card["id"] == "sigint-agent" and card["llm_mode"] == "replay"
     assert card["task_types"] == ["analyze_synthetic_communications"]
+    assert card["clearance"] == "DEMO-HIGH"
     ready = await c.get("/readyz")
     assert ready.status_code == 200 and ready.json()["llm_mode"] == "replay"
     assert (await c.get("/livez")).json() == {"status": "ok"}

@@ -13,7 +13,7 @@ from opentelemetry import trace
 
 from nexus_contracts.a2a.task import TaskRequest
 from nexus_contracts.api.errors import ErrorCode
-from nexus_contracts.common import AgentId
+from nexus_contracts.common import AgentId, Classification
 from nexus_contracts.scenario.manifest import ScenarioManifest
 from nexus_shared.agent.spec import AgentSpec, PipelineOutcome
 from nexus_shared.llm import LLMProvider, TokenBudget
@@ -26,6 +26,7 @@ class SigintSpec:
     task_types: tuple[str, ...] = pipeline.TASK_TYPES
     role: str = "SIGINT specialist: recurring contact patterns in synthetic communications metadata"
     version: str = __version__
+    clearance: Classification = Classification.DEMO_HIGH  # = Context Service CLEARANCE
 
     def validate_request(
         self, request: TaskRequest, manifest: ScenarioManifest | None

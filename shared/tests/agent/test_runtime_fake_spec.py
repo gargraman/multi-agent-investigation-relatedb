@@ -18,7 +18,7 @@ from opentelemetry import trace
 
 from nexus_contracts.a2a.task import AgentTaskStatus, TaskRequest, TaskUsage
 from nexus_contracts.api.errors import ErrorCode
-from nexus_contracts.common import AgentId
+from nexus_contracts.common import AgentId, Classification
 from nexus_contracts.scenario.manifest import ScenarioManifest
 from nexus_shared.agent.app import create_agent_app, lazy_app
 from nexus_shared.agent.settings import AgentSettings
@@ -38,6 +38,7 @@ class FakeSpec:
     outcome: PipelineOutcome
     role: str = "Fake specialist used by the shared-runtime tests"
     version: str = "0.0.0-test"
+    clearance: Classification = Classification.DEMO_MID
     runs: list[TaskRequest] = field(default_factory=list)
     # Concurrency hooks: ``started[attempt]`` is set when ``run`` begins; a run whose attempt has
     # an entry in ``gates`` waits on that event; ``error`` is raised instead of returning.
@@ -162,6 +163,7 @@ async def test_fake_spec_runs_end_to_end(tmp_path: Path) -> None:
         card = (await c.get("/.well-known/agent-card.json")).json()
     assert card["id"] == "geoint-agent" and card["task_types"] == ["analyze_synthetic_geospatial"]
     assert card["role"] == spec.role
+    assert card["clearance"] == spec.clearance.value == "DEMO-MID"
     assert len(spec.runs) == 1
 
 
