@@ -37,7 +37,7 @@ from nexus_contracts.common import AgentId, Classification, ConfidenceBand, Find
 from nexus_contracts.scenario.fixtures import CommsLog
 from nexus_contracts.scenario.loader import EvidenceIntegrityError, load_evidence
 from nexus_contracts.scenario.manifest import ScenarioManifest
-from nexus_shared.agent.llm_steps import classify_with_repair
+from nexus_shared.agent.llm_steps import FENCE_CLOSE, FENCE_OPEN, classify_with_repair, fence
 from nexus_shared.agent.prompts import Prompt
 from nexus_shared.agent.spec import PipelineOutcome
 from nexus_shared.llm import LLMProvider, ReplayKeyContext, TokenBudget
@@ -57,12 +57,10 @@ BAND_MODERATE = 0.40
 BAND_HIGH = 0.75
 """G7 (confirmed): LOW < 0.40 ≤ MODERATE < 0.75 ≤ HIGH."""
 
-FENCE_OPEN = "<<<UNTRUSTED_EVIDENCE"
-FENCE_CLOSE = "UNTRUSTED_EVIDENCE>>>"
-
-
 __all__ = [
     "AGENT_ID",
+    "FENCE_CLOSE",
+    "FENCE_OPEN",
     "LLM_TASK",
     "TASK_TYPES",
     "PipelineOutcome",
@@ -97,13 +95,6 @@ def validate_request(request: TaskRequest, manifest: ScenarioManifest | None) ->
     return None
 
 
-def _fence(evidence_id: str, text: str) -> str:
-    """Wrap untrusted text in fence markers, neutralising any marker-like text inside it."""
-    cleaned = text.replace("<<<", "< < <").replace(">>>", "> > >")
-    cleaned = cleaned.replace("UNTRUSTED_EVIDENCE", "UNTRUSTED-TEXT")
-    return f"{FENCE_OPEN} id={evidence_id}\n{cleaned}\n{FENCE_CLOSE}"
-
-
 def build_llm_input(
     objective: str,
     candidates: list[ContactCandidate],
@@ -135,7 +126,7 @@ def build_llm_input(
                     for c in cand.contacts
                 ],
                 "evidence": [
-                    {"evidence_id": eid, "summary": _fence(eid, evidence[eid].summary)}
+                    {"evidence_id": eid, "summary": fence(eid, evidence[eid].summary)}
                     for eid in cand.evidence_ids
                 ],
             }

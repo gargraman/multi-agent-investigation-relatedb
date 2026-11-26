@@ -110,8 +110,8 @@ def _overlap(a: Sighting, b: Sighting) -> bool:
 def placement_candidates(
     manifest: ScenarioManifest, sightings: Sequence[Sighting]
 ) -> list[PlacementCandidate]:
-    """One candidate per (connected component, cell), sorted by (location, valid_from). A
-    sighting with no edge produces nothing."""
+    """One candidate per (connected component, cell), sorted by (location, valid_from, observation
+    ids). A sighting with no edge produces nothing."""
     grid = manifest.grid
     radius = grid.neighbour_radius
     centres = {s.cell: grid.cell_centre(*s.cell) for s in sightings}
@@ -175,4 +175,9 @@ def placement_candidates(
                     patterns=frozenset(patterns),
                 )
             )
-    return sorted(candidates, key=lambda c: (c.location, c.valid_from))
+    # The observation-id tiebreak makes the order a pure function of the sighting set, whatever
+    # order the sightings arrived in.
+    return sorted(
+        candidates,
+        key=lambda c: (c.location, c.valid_from, tuple(s.observation_id for s in c.sightings)),
+    )

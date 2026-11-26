@@ -4,14 +4,20 @@
 structured call plus at most one repair call that is told the previous output's errors. Budget is
 checked before each call and charged after it; span names and attributes are the S2 ones
 (``gen_ai.generate`` with ``nexus.call_ordinal`` and the ``gen_ai.*`` model/usage attributes).
+
+:func:`check_classifications` holds the post-parse rules every classify output shares (ids exactly
+the given aliases, confidence in [0, 1], non-empty text within length caps), and :func:`fence`
+wraps untrusted fixture text for the model. Both moved here from SIGINT unchanged: SIGINT's S2
+replay keys hash the fenced text, so its bytes must never drift.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from opentelemetry import trace
 from pydantic import BaseModel
@@ -32,6 +38,77 @@ from nexus_shared.llm import (
 )
 
 log = logging.getLogger(__name__)
+
+FENCE_OPEN = "<<<UNTRUSTED_EVIDENCE"
+FENCE_CLOSE = "UNTRUSTED_EVIDENCE>>>"
+
+
+def fence(evidence_id: str, text: str) -> str:
+    """Wrap untrusted text in fence markers, neutralising any marker-like text inside it."""
+    cleaned = text.replace("<<<", "< < <").replace(">>>", "> > >")
+    cleaned = cleaned.replace("UNTRUSTED_EVIDENCE", "UNTRUSTED-TEXT")
+    return f"{FENCE_OPEN} id={evidence_id}\n{cleaned}\n{FENCE_CLOSE}"
+
+
+class Classified(Protocol):
+    """One per-candidate classification item (any agent's ``CandidateClassification``)."""
+
+    @property
+    def candidate_id(self) -> str: ...
+
+    @property
+    def confidence(self) -> float: ...
+
+    @property
+    def statement(self) -> str: ...
+
+    @property
+    def reasoning_summary(self) -> str: ...
+
+
+def check_classifications(
+    items: Sequence[Classified],
+    candidate_ids: list[str],
+    statement_max: int,
+    reasoning_max: int,
+) -> list[str]:
+    """Post-parse rules. Returns content-free violation messages (empty list = valid)."""
+    errors: list[str] = []
+    seen = [c.candidate_id for c in items]
+    expected = set(candidate_ids)
+    missing = sorted(expected - set(seen), key=_alias_order)
+    unknown = sorted({s for s in seen if s not in expected}, key=_alias_order)
+    dupes = sorted({s for s in seen if seen.count(s) > 1}, key=_alias_order)
+    if missing:
+        errors.append(f"missing candidate_id(s): {', '.join(missing)}")
+    if unknown:
+        errors.append(f"unknown candidate_id(s) (only {_range(candidate_ids)} exist)")
+    if dupes:
+        errors.append(f"duplicate candidate_id(s): {', '.join(dupes)}")
+    for c in items:
+        if c.candidate_id not in expected:
+            continue
+        where = c.candidate_id
+        if not math.isfinite(c.confidence) or not 0.0 <= c.confidence <= 1.0:
+            errors.append(f"{where}.confidence must be within [0, 1]")
+        if not c.statement.strip():
+            errors.append(f"{where}.statement must not be empty")
+        elif len(c.statement) > statement_max:
+            errors.append(f"{where}.statement exceeds {statement_max} characters")
+        if not c.reasoning_summary.strip():
+            errors.append(f"{where}.reasoning_summary must not be empty")
+        elif len(c.reasoning_summary) > reasoning_max:
+            errors.append(f"{where}.reasoning_summary exceeds {reasoning_max} characters")
+    return errors
+
+
+def _alias_order(alias: str) -> tuple[int, str]:
+    digits = alias[1:]
+    return (int(digits), alias) if alias.startswith("C") and digits.isdigit() else (10**9, alias)
+
+
+def _range(ids: list[str]) -> str:
+    return f"{ids[0]}..{ids[-1]}" if ids else "none"
 
 
 @dataclass(frozen=True)

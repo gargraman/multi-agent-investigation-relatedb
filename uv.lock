@@ -530,14 +530,20 @@ name = "nexus-geoint"
 version = "0.1.0"
 source = { editable = "nodes/geoint-node" }
 dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
     { name = "nexus-contracts" },
-    { name = "nexus-shared" },
+    { name = "nexus-shared", extra = ["agent"] },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = ">=0.165.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "nexus-contracts", editable = "contracts" },
-    { name = "nexus-shared", editable = "shared" },
+    { name = "nexus-shared", extras = ["agent"], editable = "shared" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 
 [[package]]

@@ -8,10 +8,11 @@ triggers the single repair call.
 
 from __future__ import annotations
 
-import math
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
+
+from nexus_shared.agent.llm_steps import check_classifications
 
 SCHEMA_VERSION = "sigint-llm-output@1.0.0"
 STATEMENT_MAX = 300
@@ -41,40 +42,8 @@ class SigintLlmOutput(BaseModel):
 
 
 def check_output(output: SigintLlmOutput, candidate_ids: list[str]) -> list[str]:
-    """Post-parse rules. Returns content-free violation messages (empty list = valid)."""
-    errors: list[str] = []
-    seen = [c.candidate_id for c in output.classifications]
-    expected = set(candidate_ids)
-    missing = sorted(expected - set(seen), key=_alias_order)
-    unknown = sorted({s for s in seen if s not in expected}, key=_alias_order)
-    dupes = sorted({s for s in seen if seen.count(s) > 1}, key=_alias_order)
-    if missing:
-        errors.append(f"missing candidate_id(s): {', '.join(missing)}")
-    if unknown:
-        errors.append(f"unknown candidate_id(s) (only {_range(candidate_ids)} exist)")
-    if dupes:
-        errors.append(f"duplicate candidate_id(s): {', '.join(dupes)}")
-    for c in output.classifications:
-        if c.candidate_id not in expected:
-            continue
-        where = c.candidate_id
-        if not math.isfinite(c.confidence) or not 0.0 <= c.confidence <= 1.0:
-            errors.append(f"{where}.confidence must be within [0, 1]")
-        if not c.statement.strip():
-            errors.append(f"{where}.statement must not be empty")
-        elif len(c.statement) > STATEMENT_MAX:
-            errors.append(f"{where}.statement exceeds {STATEMENT_MAX} characters")
-        if not c.reasoning_summary.strip():
-            errors.append(f"{where}.reasoning_summary must not be empty")
-        elif len(c.reasoning_summary) > REASONING_MAX:
-            errors.append(f"{where}.reasoning_summary exceeds {REASONING_MAX} characters")
-    return errors
-
-
-def _alias_order(alias: str) -> tuple[int, str]:
-    digits = alias[1:]
-    return (int(digits), alias) if alias.startswith("C") and digits.isdigit() else (10**9, alias)
-
-
-def _range(ids: list[str]) -> str:
-    return f"{ids[0]}..{ids[-1]}" if ids else "none"
+    """Post-parse rules (shared with GEOINT). Returns content-free violation messages (empty list =
+    valid)."""
+    return check_classifications(
+        output.classifications, candidate_ids, STATEMENT_MAX, REASONING_MAX
+    )

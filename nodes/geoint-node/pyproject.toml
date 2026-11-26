@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "Nexus GEOINT specialist agent node."
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.165.0",
+    "httpx>=0.28.1",
     "nexus-contracts",
-    "nexus-shared",
+    "nexus-shared[agent]",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [tool.uv.sources]

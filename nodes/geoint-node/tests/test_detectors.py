@@ -212,3 +212,33 @@ def test_candidates_sorted_by_location_then_start():
         ("subject-delta", 50, 50, 13, 15),
     )
     assert [c.location for c in got] == ["LOC-GRID-00", "LOC-GRID-15"]
+
+
+def test_candidate_order_is_independent_of_input_order():
+    import random
+
+    m = manifest_for(BASE)
+    res = resolve_sightings(m, load_logs(BASE))
+    expected = placement_candidates(m, res.sightings)
+    rng = random.Random(7)
+    for _ in range(20):
+        shuffled = list(res.sightings)
+        rng.shuffle(shuffled)
+        assert placement_candidates(m, shuffled) == expected
+
+
+@pytest.mark.parametrize(
+    "x2,y2,conflict",
+    [(150, 150, False), (250, 50, True)],
+    ids=["diagonal-141.4-no-conflict", "two-cells-200-conflict"],
+)
+def test_same_subject_conflict_threshold(x2, y2, conflict):
+    _, got = _candidates(
+        ("subject-alpha", 50, 50, 8, 10),
+        ("subject-alpha", x2, y2, 9, 11),
+    )
+    if conflict:
+        assert [c.location for c in got] == ["LOC-GRID-00", "LOC-GRID-02"]
+        assert all(c.patterns == frozenset({Pattern.CONFLICT}) for c in got)
+    else:
+        assert got == []
