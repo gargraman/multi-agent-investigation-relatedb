@@ -61,7 +61,13 @@ class OrchestratorSettings(ServiceSettings):
         default_factory=lambda: {AgentId.SIGINT: "http://sigint-agent:8000"}
     )
     # Spec §8.5: specialist task deadline (180 s), capped by the investigation deadline.
-    task_deadline_seconds: float = Field(default=180, gt=0)
+    task_deadline_seconds: float = Field(
+        default=180,
+        gt=0,
+        validation_alias=AliasChoices(
+            "NEXUS_TASK_DEADLINE_SECONDS", "TASK_DEADLINE_SECONDS", "task_deadline_seconds"
+        ),
+    )
     # FR-003: POST /v1/tasks; connect error / timeout / 5xx retried this often at this backoff.
     dispatch_timeout_seconds: float = Field(default=5.0, gt=0)
     dispatch_max_retries: int = Field(default=3, ge=0)

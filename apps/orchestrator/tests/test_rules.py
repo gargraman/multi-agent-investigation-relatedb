@@ -292,6 +292,16 @@ def test_settings_defaults_and_env_parsing(make_settings, monkeypatch) -> None:
     assert make_settings().nexus_enabled_agents == ()
 
 
+def test_task_deadline_reads_the_documented_env_name(make_settings, monkeypatch) -> None:
+    """Spec §18 and ``compose.chaos.yaml`` set ``NEXUS_TASK_DEADLINE_SECONDS``; the bare
+    ``TASK_DEADLINE_SECONDS`` keeps working."""
+    monkeypatch.setenv("NEXUS_TASK_DEADLINE_SECONDS", "45")
+    assert make_settings().task_deadline_seconds == 45
+    monkeypatch.delenv("NEXUS_TASK_DEADLINE_SECONDS")
+    monkeypatch.setenv("TASK_DEADLINE_SECONDS", "60")
+    assert make_settings().task_deadline_seconds == 60
+
+
 @pytest.mark.parametrize(
     "overrides,message",
     [
