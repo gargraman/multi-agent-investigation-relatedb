@@ -7,15 +7,20 @@ The expected tables are written out again here on purpose, as an independent cop
 from __future__ import annotations
 
 import itertools
+from datetime import UTC, datetime
 
 import pytest
+from orch_testkit import SCENARIO, SCENARIOS_DIR
 from pydantic import ValidationError
 
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.states import InvestigationStatus as I
 from nexus_contracts.api.states import OrchestratorTaskState as T
 from nexus_contracts.common import AgentId
+from nexus_contracts.scenario.loader import load_manifest
+from nexus_orchestrator.state.repository import TaskRecord
 from nexus_orchestrator.workflow import terminal
+from nexus_orchestrator.workflow.poller import outcomes_in_template_order
 from nexus_orchestrator.workflow.transitions import (
     IllegalTransition,
     check_investigation,
@@ -124,14 +129,14 @@ def o(
         ([o(SIG, T.RUNNING)], [GEO, ANA], None),
         ([o(SIG, T.PENDING)], [GEO, ANA], None),
         ([o(SIG, T.COMPLETED), o(GEO, T.DISPATCHED)], [ANA], None),
-        # row 1: no task rows at all
+        # FR-124: no task rows at all
         ([], [SIG, GEO, ANA], (I.FAILED, ErrorCode.AGENT_NOT_ENABLED)),
-        # row 2: no specialist COMPLETED
+        # FR-124: no specialist COMPLETED, reason of the failing task (fallback when absent)
         ([o(SIG, T.FAILED)], [GEO, ANA], (I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)),
         ([o(SIG, T.CANCELLED)], [GEO, ANA], (I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)),
         # FR-124 fallback: a TIMED_OUT task without a reason is deadline_exceeded
         ([o(SIG, T.TIMED_OUT)], [GEO, ANA], (I.FAILED, ErrorCode.DEADLINE_EXCEEDED)),
-        # row 3: the S2 demo path
+        # FR-124: all specialists COMPLETED (the S2 demo path)
         ([o(SIG, T.COMPLETED)], [GEO, ANA], (I.PARTIAL, ErrorCode.AGENT_NOT_ENABLED)),
         # FR-124: some completed, reason is the first non-COMPLETED task's (here: the fallback)
         (
@@ -194,6 +199,54 @@ def test_no_tasks_failed_agent_not_enabled() -> None:
 def test_unknown_reason_string_falls_back() -> None:
     decision = terminal.decide([o(SIG, T.FAILED, "not-a-code")], [])
     assert decision == terminal.TerminalDecision(I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)
+
+
+def _record(agent: AgentId, state: T, reason: str | None = None) -> TaskRecord:
+    return TaskRecord(
+        id=f"tsk_{agent.value}",
+        investigation_id="inv_1",
+        agent_id=agent,
+        task_type="t",
+        status=state,
+        status_reason=reason,
+        attempt=1,
+        deadline=datetime(2026, 1, 1, tzinfo=UTC),
+        token_reservation=0,
+        acked_at=None,
+        version=1,
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def test_outcomes_follow_manifest_template_order() -> None:
+    full = load_manifest(SCENARIOS_DIR / SCENARIO)
+    sig_geo = [t for t in full.template.tasks if t.agent in (SIG, GEO)]
+    assert [t.agent for t in sig_geo] == [SIG, GEO]  # the premise of this test
+    manifest = full.model_copy(
+        update={"template": full.template.model_copy(update={"tasks": sig_geo})}
+    )
+    # as ``ORDER BY created_at, id`` can return them: reversed, and an off-template agent first
+    records = [
+        _record(ANA, T.COMPLETED),
+        _record(GEO, T.FAILED, ErrorCode.TASK_LOST.value),
+        _record(SIG, T.TIMED_OUT, ErrorCode.DEADLINE_EXCEEDED.value),
+    ]
+    outcomes = outcomes_in_template_order(manifest, records)
+    assert [x.agent_id for x in outcomes] == [SIG, GEO, ANA]
+    assert [x.reason for x in outcomes] == [ErrorCode.DEADLINE_EXCEEDED.value, "task_lost", None]
+    assert [x.state for x in outcomes] == [T.TIMED_OUT, T.FAILED, T.COMPLETED]
+    assert not any(x.retry_open for x in outcomes)
+    # the order decides the investigation reason: SIGINT's failure comes first
+    assert terminal.decide(outcomes, []) == terminal.TerminalDecision(
+        I.FAILED, ErrorCode.DEADLINE_EXCEEDED
+    )
+
+
+def test_outcomes_without_a_manifest_keep_input_order() -> None:
+    records = [_record(GEO, T.COMPLETED), _record(SIG, T.FAILED, "task_lost")]
+    outcomes = outcomes_in_template_order(None, records)
+    assert [x.agent_id for x in outcomes] == [GEO, SIG]
+    assert outcomes[1].reason == "task_lost" and not outcomes[1].retry_open
 
 
 # -- settings ---------------------------------------------------------------------------------
