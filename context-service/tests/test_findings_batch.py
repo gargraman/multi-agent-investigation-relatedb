@@ -247,11 +247,107 @@ async def test_same_task_id_from_other_caller_is_403_without_ids(client, app: Fa
     r3 = await client.post(URL, json=batch_body("inv_scope", task_id="tsk_X"), headers=GEOINT)
     _problem(r3, 403, "forbidden")
     assert "fnd_" not in r3.text
-    assert await _counts(app) == snapshot  # nothing written
+    # Nothing written except the two denial audits (each: one AuditEvent + one CONCERNS edge).
+    after = await _counts(app)
+    assert after.pop("AuditEvent") == snapshot.pop("AuditEvent") + 2
+    assert after.pop("edges") == snapshot.pop("edges") + 2
+    assert after == snapshot
 
     # The owner can still replay.
     r4 = await client.post(URL, json=batch_body("inv_scope", task_id="tsk_X"), headers=SIGINT)
     assert r4.status_code == 200 and r4.json()["finding_ids"] == r1.json()["finding_ids"]
+
+
+async def test_cross_caller_writes_denied_audit_row(client, app: FastAPI) -> None:
+    """S3 FR-130: the 403 rolls back the batch transaction, but the denial is still audited."""
+    await _create(client, "inv_denied")
+    r1 = await client.post(URL, json=batch_body("inv_denied", task_id="tsk_D"), headers=SIGINT)
+    assert r1.status_code == 201, r1.text
+
+    geo_body = batch_body("inv_denied", task_id="tsk_D", findings=[_geoint_finding()])
+    _problem(await client.post(URL, json=geo_body, headers=GEOINT), 403, "forbidden")
+
+    rows = await read(
+        app,
+        "MATCH (a:AuditEvent {authz:'DENIED'}) RETURN a.caller AS caller, a.actor AS actor, "
+        "a.operation AS op, a.outcome AS outcome, a.target_id AS target",
+    )
+    assert rows == [
+        {
+            "caller": "geoint-agent",
+            "actor": "geoint-agent",
+            "op": "findings.submit",
+            "outcome": "DENIED",
+            "target": "inv_denied",
+        }
+    ]
+    # The audit row names no finding or submission id (the owner's ids must not leak).
+    assert "fnd_" not in str(rows) and "sub_" not in str(rows)
+    # And it concerns nothing but the requested investigation.
+    [edge] = await read(
+        app,
+        "MATCH (:AuditEvent {authz:'DENIED'})-[:CONCERNS]->(t) RETURN labels(t) AS labels",
+    )
+    assert edge["labels"] == ["Investigation"]
+
+
+async def test_cross_caller_to_other_investigation_403(client, app: FastAPI) -> None:
+    """task_id is globally keyed: reusing it from another caller in a different investigation is
+    still a 403 (no ids, no ownership hint), audited against the requested investigation."""
+    await _create(client, "inv_own")
+    await _create(client, "inv_other")
+    r1 = await client.post(URL, json=batch_body("inv_own", task_id="tsk_G"), headers=SIGINT)
+    assert r1.status_code == 201, r1.text
+    snapshot = await _counts(app)
+
+    geo_body = batch_body("inv_other", task_id="tsk_G", findings=[_geoint_finding()])
+    r2 = await client.post(URL, json=geo_body, headers=GEOINT)
+    problem = _problem(r2, 403, "forbidden")
+    assert "fnd_" not in r2.text and "finding_ids" not in problem
+    assert "inv_own" not in r2.text and "sigint" not in r2.text.lower()
+
+    after = await _counts(app)
+    assert after.pop("AuditEvent") == snapshot.pop("AuditEvent") + 1
+    assert after.pop("edges") == snapshot.pop("edges") + 1  # the denial's CONCERNS edge only
+    assert after == snapshot
+    [row] = await read(app, "MATCH (a:AuditEvent {authz:'DENIED'}) RETURN a.target_id AS target")
+    assert row["target"] == "inv_other"
+
+
+async def test_cross_caller_to_closed_investigation(client, app: FastAPI) -> None:
+    """409 investigation_cancelled beats 403: a closed investigation must not reveal who owns the
+    task_id, and the fence is not a denial (no DENIED audit)."""
+    await _create(client, "inv_closed_x")
+    r1 = await client.post(URL, json=batch_body("inv_closed_x", task_id="tsk_C"), headers=SIGINT)
+    assert r1.status_code == 201, r1.text
+    close = await client.post(
+        "/v1/investigations/inv_closed_x/close", json={"status": "CANCELLED"}, headers=ORCH
+    )
+    assert close.status_code == 200
+    snapshot = await _counts(app)
+
+    geo_body = batch_body("inv_closed_x", task_id="tsk_C", findings=[_geoint_finding()])
+    r2 = await client.post(URL, json=geo_body, headers=GEOINT)
+    problem = _problem(r2, 409, "investigation_cancelled")
+    assert "fnd_" not in r2.text and "finding_ids" not in problem
+    assert await _counts(app) == snapshot
+    assert await read(app, "MATCH (a:AuditEvent {authz:'DENIED'}) RETURN a.id AS id") == []
+
+    # The owner's replay before the fence is unchanged (G15).
+    r3 = await client.post(URL, json=batch_body("inv_closed_x", task_id="tsk_C"), headers=SIGINT)
+    assert r3.status_code == 200 and r3.json()["finding_ids"] == r1.json()["finding_ids"]
+
+
+async def test_403_detail_is_generic(client) -> None:
+    await _create(client, "inv_generic")
+    own = batch_body("inv_generic", task_id="tsk_secret")
+    r1 = await client.post(URL, json=own, headers=SIGINT)
+    assert r1.status_code == 201, r1.text
+    geo_body = batch_body("inv_generic", task_id="tsk_secret", findings=[_geoint_finding()])
+    r2 = await client.post(URL, json=geo_body, headers=GEOINT)
+    problem = _problem(r2, 403, "forbidden")
+    assert problem["detail"] == "forbidden"
+    assert "tsk_secret" not in r2.text and "task" not in problem["detail"]
 
 
 async def test_same_caller_replay_still_200(client) -> None:

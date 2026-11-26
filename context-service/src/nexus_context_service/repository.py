@@ -16,6 +16,7 @@ Audit policy (S1, extended in S2):
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,7 +26,7 @@ import relate
 from opentelemetry import trace
 
 from nexus_context_service.ids import new_id
-from nexus_context_service.lane import RelateLane
+from nexus_context_service.lane import LaneUnavailable, RelateLane
 from nexus_context_service.queries import context as cq
 from nexus_context_service.queries import findings as fq
 from nexus_context_service.queries import investigations as q
@@ -51,6 +52,8 @@ from nexus_contracts.common import EntityType
 
 OPEN = "OPEN"
 CLOSED = "CLOSED"
+
+log = logging.getLogger(__name__)
 
 
 class InvestigationNotFound(Exception):
@@ -343,6 +346,8 @@ class GraphRepository:
             head = dict(rows[0])
             if head["finding_ids"] is not None:  # this task already committed (before fence, G15)
                 if head["sub_caller"] != caller:  # caller-scoped idempotency, checked first
+                    if head["write_state"] == CLOSED:  # the fence wins: no ownership hint
+                        raise InvestigationClosed(inv)
                     raise TaskOwnedByOtherCaller()
                 same = head["content_hash"] == content_hash and head["sub_inv"] == inv
                 if same:
@@ -412,7 +417,17 @@ class GraphRepository:
             )
             return BatchResult(finding_ids=finding_ids, created=True)
 
-        return await self._lane.run("findings.submit", _tx)
+        try:
+            return await self._lane.run("findings.submit", _tx)
+        except TaskOwnedByOtherCaller:
+            # The batch transaction rolled back with the raise, so the denial is audited in its
+            # own committed transaction. Target is the requested investigation, never the
+            # owner's Submission: its ids must not appear in the audit row.
+            try:
+                await self.record_denial(audit, "findings.submit", inv)
+            except LaneUnavailable:
+                log.warning("denial not audited: store not ready", extra={"op": "findings.submit"})
+            raise
 
     async def get_context(self, investigation_id: str) -> InvestigationContext:
         """Read model (FR-044). Orchestrator view: DEMO-HIGH clearance, so nothing is filtered."""

@@ -173,9 +173,8 @@ async def submit_findings(
     except InvestigationNotFound as exc:
         raise ProblemError(404, "investigation not found") from exc
     except TaskOwnedByOtherCaller as exc:
-        raise ProblemError(
-            403, "task_id belongs to another caller", code=ErrorCode.FORBIDDEN
-        ) from exc
+        # Generic on purpose: no task_id, owner or ids (S3 FR-130); the denial is audited.
+        raise ProblemError(403, "forbidden", code=ErrorCode.FORBIDDEN) from exc
     except AlreadyCommitted as exc:
         raise ProblemError(
             409,
