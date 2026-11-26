@@ -193,8 +193,19 @@ async def test_prompt_injection_cannot_change_graph_facts(baseline_copy: Scenari
     )
     baseline_copy.edit_fixture("ev-sig-004", lambda d: d.update(summary=injection), rehash=True)
     clean = await _run(FakeProvider(valid_output(2)))
-    # The "model" obeys the injection in its wording and confidence: graph facts must not move.
-    obeying = valid_output(2, confidence=1.0, statement="Linked HDL-ALPHA-1 to HDL-BRAVO-1.")
+    # Wording that cites ids outside the candidate is refused by the output guard (S3b): one
+    # repair, then SCHEMA_INVALID, no batch.
+    citing = valid_output(2, confidence=1.0, statement="Linked HDL-ALPHA-1 to HDL-BRAVO-1.")
+    refused = await _run(
+        FakeProvider(citing, citing),
+        manifest=baseline_copy.manifest,
+        fixtures=baseline_copy.fixtures,
+    )
+    assert refused.error.code is ErrorCode.SCHEMA_INVALID and refused.batch is None
+    assert refused.usage.llm_calls == 2
+    # The "model" obeys the injection in its wording and confidence, within the guard: graph
+    # facts must not move.
+    obeying = valid_output(2, confidence=1.0, statement="Linked as the evidence note instructs.")
     provider = FakeProvider(obeying)
     out = await _run(provider, manifest=baseline_copy.manifest, fixtures=baseline_copy.fixtures)
     assert out.status is AgentTaskStatus.COMPLETED

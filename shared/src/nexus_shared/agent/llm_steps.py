@@ -6,7 +6,8 @@ checked before each call and charged after it; span names and attributes are the
 (``gen_ai.generate`` with ``nexus.call_ordinal`` and the ``gen_ai.*`` model/usage attributes).
 
 :func:`check_classifications` holds the post-parse rules every classify output shares (ids exactly
-the given aliases, confidence in [0, 1], non-empty text within length caps), and :func:`fence`
+the given aliases, confidence in [0, 1], non-empty text within length caps, and the S3b output
+guard of :func:`text_violations` on that text), and :func:`fence`
 wraps untrusted fixture text for the model. Both moved here from SIGINT unchanged: SIGINT's S2
 replay keys hash the fenced text, so its bytes must never drift.
 """
@@ -15,7 +16,8 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Sequence
+import re
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -66,13 +68,43 @@ class Classified(Protocol):
     def reasoning_summary(self) -> str: ...
 
 
+_FENCE_RE = re.compile(r"<<<|>>>|UNTRUSTED_EVIDENCE|UNTRUSTED-TEXT")
+_URL_RE = re.compile(r"\bhttps?://|\bwww\.", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"NEXUS-")
+_REF_RE = re.compile(
+    r"\bLOC-GRID-\d{2}\b|\bENT-[A-Z0-9-]+\b|\bHDL-[A-Z0-9-]+\b|\bev-[a-z]+-\d{3}\b"
+)
+
+
+def text_violations(field: str, text: str, allowed_refs: frozenset[str]) -> list[str]:
+    """Output-side guard on one model-written text field (S3b). ``field`` is the message prefix
+    (e.g. ``C1.statement``). Returns at most one message per rule; messages never echo the
+    offending text, because the repair prompt would re-inject it."""
+    errors: list[str] = []
+    if _FENCE_RE.search(text):
+        errors.append(f"{field} contains fence markers")
+    if _URL_RE.search(text):
+        errors.append(f"{field} contains a URL")
+    if _TOKEN_RE.search(text):
+        errors.append(f"{field} contains a reserved token")
+    if any(m.group(0) not in allowed_refs for m in _REF_RE.finditer(text)):
+        errors.append(f"{field} references an id outside its candidate")
+    return errors
+
+
 def check_classifications(
     items: Sequence[Classified],
     candidate_ids: list[str],
     statement_max: int,
     reasoning_max: int,
+    *,
+    allowed_refs: Mapping[str, frozenset[str]],
 ) -> list[str]:
-    """Post-parse rules. Returns content-free violation messages (empty list = valid)."""
+    """Post-parse rules. Returns content-free violation messages (empty list = valid).
+
+    ``allowed_refs`` maps each candidate alias to the ids its text may cite (the candidate's
+    ``about`` ids and evidence ids); a valid, length-capped text is also run through
+    :func:`text_violations`."""
     errors: list[str] = []
     seen = [c.candidate_id for c in items]
     expected = set(candidate_ids)
@@ -89,16 +121,21 @@ def check_classifications(
         if c.candidate_id not in expected:
             continue
         where = c.candidate_id
+        refs = allowed_refs.get(where, frozenset())
         if not math.isfinite(c.confidence) or not 0.0 <= c.confidence <= 1.0:
             errors.append(f"{where}.confidence must be within [0, 1]")
         if not c.statement.strip():
             errors.append(f"{where}.statement must not be empty")
         elif len(c.statement) > statement_max:
             errors.append(f"{where}.statement exceeds {statement_max} characters")
+        else:
+            errors.extend(text_violations(f"{where}.statement", c.statement, refs))
         if not c.reasoning_summary.strip():
             errors.append(f"{where}.reasoning_summary must not be empty")
         elif len(c.reasoning_summary) > reasoning_max:
             errors.append(f"{where}.reasoning_summary exceeds {reasoning_max} characters")
+        else:
+            errors.extend(text_violations(f"{where}.reasoning_summary", c.reasoning_summary, refs))
     return errors
 
 

@@ -126,6 +126,10 @@ async def test_injection_cannot_move_placements_or_reach_stored_summaries() -> N
     assert all("TRIPWIRE" not in s and "LOC-GRID-00" not in s for s in stored)
     oracle = manifest_for(PI).oracle
     assert find_forbidden(oracle, [("stored", s) for s in stored]) == []
+    # Nor does any tripwire reach the task summary or warnings.
+    assert oracle.forbidden_output_strings
+    task_text = [("summary", out.summary)] + [("warning", w) for w in out.warnings]
+    assert find_forbidden(oracle, task_text) == []
     # The planted text reached the model only inside exactly one fence.
     fenced = provider.calls[0]["input_data"]["candidates"][0]["evidence"][0]["summary"]
     assert fenced.count(FENCE_OPEN) == 1 and fenced.count(FENCE_CLOSE) == 1
@@ -134,8 +138,20 @@ async def test_injection_cannot_move_placements_or_reach_stored_summaries() -> N
 
 async def test_obeying_model_cannot_change_graph_facts() -> None:
     clean = await _run(ScriptedProvider(valid_output_for), request=make_request(PI))
-    obeying = ScriptedProvider(
+    # Wording that cites a location outside the candidate is refused by the output guard (S3b):
+    # one repair, then SCHEMA_INVALID, no batch.
+    citing = ScriptedProvider(
         lambda d: valid_output_for(d, confidence=1.0, statement="Relocated to LOC-GRID-00.")
+    )
+    refused = await _run(citing, request=make_request(PI))
+    assert refused.error.code is ErrorCode.SCHEMA_INVALID and refused.batch is None
+    assert refused.usage.llm_calls == 2
+    assert citing.calls[1]["input_data"]["repair"]["errors"] == [
+        "C1.statement references an id outside its candidate"
+    ]
+    # Obeying wording within the guard still cannot move graph facts.
+    obeying = ScriptedProvider(
+        lambda d: valid_output_for(d, confidence=1.0, statement="Relocated as instructed.")
     )
     out = await _run(obeying, request=make_request(PI))
     for a, b in zip(clean.batch.findings, out.batch.findings, strict=True):

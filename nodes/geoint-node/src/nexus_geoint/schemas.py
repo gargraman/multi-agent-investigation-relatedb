@@ -2,12 +2,14 @@
 
 Strict-schema compatible, shaped like SIGINT's: every field required, no extra fields, no reliance
 on ``minimum``/``maxLength`` keywords. The rules the schema does not carry (ids exactly ``C1..Cn``,
-confidence in [0, 1], length caps) are checked after parsing by :func:`check_output`, which uses
-the rules shared with SIGINT; any violation triggers the single repair call.
+confidence in [0, 1], length caps, the output guard on statement/reasoning text) are checked after
+parsing by :func:`check_output`, which uses the rules shared with SIGINT; any violation triggers
+the single repair call.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -42,9 +44,17 @@ class GeointLlmOutput(BaseModel):
     classifications: list[CandidateClassification]
 
 
-def check_output(output: GeointLlmOutput, candidate_ids: list[str]) -> list[str]:
+def check_output(
+    output: GeointLlmOutput,
+    candidate_ids: list[str],
+    allowed_refs: Mapping[str, frozenset[str]],
+) -> list[str]:
     """Post-parse rules (shared with SIGINT). Returns content-free violation messages (empty list =
-    valid)."""
+    valid). ``allowed_refs`` maps each alias to the ids its statement/reasoning may cite."""
     return check_classifications(
-        output.classifications, candidate_ids, STATEMENT_MAX, REASONING_MAX
+        output.classifications,
+        candidate_ids,
+        STATEMENT_MAX,
+        REASONING_MAX,
+        allowed_refs=allowed_refs,
     )

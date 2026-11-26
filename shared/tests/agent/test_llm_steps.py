@@ -23,7 +23,9 @@ class Item:
 
 
 def _check(items: list[Item], ids: tuple[str, ...] = ("C1", "C2")) -> list[str]:
-    return check_classifications(items, list(ids), statement_max=10, reasoning_max=20)
+    return check_classifications(
+        items, list(ids), statement_max=10, reasoning_max=20, allowed_refs={}
+    )
 
 
 def test_valid_items_pass() -> None:

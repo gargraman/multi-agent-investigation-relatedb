@@ -284,6 +284,11 @@ async def run(
 
     input_data = build_llm_input(request.objective, candidates, evidence)
     aliases = [f"C{i}" for i in range(1, len(candidates) + 1)]
+    # Output guard (S3b): a candidate's text may cite only its own about ids and evidence ids.
+    allowed_refs = {
+        alias: frozenset([cand.subject, cand.object]) | frozenset(cand.evidence_ids)
+        for alias, cand in zip(aliases, candidates, strict=True)
+    }
     key_context = ReplayKeyContext(
         scenario_id=request.scenario_id,
         agent_id=AGENT_ID.value,
@@ -296,7 +301,7 @@ async def run(
         prompt=prompt,
         input_data=input_data,
         output_schema=SigintLlmOutput,
-        check=lambda out: check_output(cast(SigintLlmOutput, out), aliases),
+        check=lambda out: check_output(cast(SigintLlmOutput, out), aliases, allowed_refs),
         budget=budget,
         key_context=key_context,
         llm_task=LLM_TASK,
