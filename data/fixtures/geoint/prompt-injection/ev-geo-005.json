@@ -9,6 +9,14 @@
       "subject": "subject-foxtrot",
       "x": 337.5,
       "y": 162.2
+    },
+    {
+      "observation_id": "ev-geo-005-o02",
+      "observed_from": "2026-10-26T14:30:00Z",
+      "observed_until": "2026-10-26T15:30:00Z",
+      "subject": "subject-charlie",
+      "x": 352.0,
+      "y": 148.0
     }
   ],
   "schema": "nexus.fixture.geoint.sightings/1",

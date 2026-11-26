@@ -16,6 +16,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from nexus_contracts.common import AgentId
+from nexus_contracts.scenario.loader import load_manifest
+from nexus_contracts.scenario.oracle import Oracle
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA = REPO_ROOT / "data"
 SCENARIOS = ["baseline-corroboration", "contradiction", "prompt-injection"]
@@ -25,6 +29,10 @@ FREE_TEXT_FIELDS = ("summary", "collector", "sensor")
 
 def manifest(scenario: str) -> dict:
     return yaml.safe_load((DATA / "scenarios" / scenario / "manifest.yaml").read_text())
+
+
+def oracle(scenario: str) -> Oracle:
+    return load_manifest(DATA / "scenarios" / scenario / "manifest.yaml").oracle
 
 
 def fixtures(scenario: str) -> dict[str, dict]:
@@ -144,3 +152,10 @@ def test_decoy_handle_is_unresolved() -> None:
     records = [r for r in fixtures(PI)["ev-sig-010"]["records"]]
     assert any(decoy in (r["from_handle"], r["to_handle"]) for r in records)
     assert decoy not in names
+
+
+def test_foxtrot_geoint_expectation_is_a_colocation_with_charlie() -> None:
+    geo = [f for f in oracle(PI).expected_findings if f.agent is AgentId.GEOINT]
+    assert [(f.assertion, sorted(f.about), f.evidence) for f in geo] == [
+        ("PLACED_AT", ["ENT-CHARLIE", "ENT-FOXTROT", "LOC-GRID-09"], ["ev-geo-005"])
+    ]
