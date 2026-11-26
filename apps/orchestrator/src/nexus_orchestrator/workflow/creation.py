@@ -279,7 +279,7 @@ class InvestigationWorkflow:
             counts[outcome] += 1
         running = await self.repo.list_ids_with_status(InvestigationStatus.RUNNING)
         for investigation_id in running:
-            self.poller.ensure(investigation_id)
+            self.poller.ensure(investigation_id, resumed=True)  # FR-127: poll before deadlines
         counts["running_resumed"] = len(running)
         log.info("resume sweep finished", extra={"investigations": len(ids), **counts})
         return counts

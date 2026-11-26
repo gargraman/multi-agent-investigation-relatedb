@@ -19,6 +19,11 @@ Each tick, only while this process **holds the leader lock** (ADR-005 D1):
 4. When every task row is terminal, apply the S2 terminal rule (``workflow/terminal.py``) and
    exit.
 
+A **resumed** driver (startup sweep, FR-127) runs its first tick as 2, 3, then 0, 1 and the
+re-dispatch: what the agent finished during the outage is kept, and only a task with no terminal
+answer is timed out. Past the investigation deadline nothing is re-POSTed. After each COMPLETED
+task the analysis budget is checked and logged only (FR-128, ``budget.py``).
+
 Then sleep ``poll_interval_seconds`` ± ``poll_jitter_ratio`` (2 s ± 20 %).
 
 On a transition to a terminal state the result is persisted with it in one transaction:
@@ -65,7 +70,7 @@ from nexus_orchestrator.state.repository import (
     Repository,
     TaskRecord,
 )
-from nexus_orchestrator.workflow import deadlines, terminal
+from nexus_orchestrator.workflow import budget, deadlines, terminal
 from nexus_orchestrator.workflow.dispatch import Dispatcher, stored_carrier
 from nexus_orchestrator.workflow.fence import Fence
 from nexus_orchestrator.workflow.transitions import FIRST_ATTEMPT
@@ -138,15 +143,17 @@ class Poller:
 
     # -- lifecycle ------------------------------------------------------------------------------
 
-    def ensure(self, investigation_id: str) -> None:
-        """Start a driver for this investigation unless one is already running."""
+    def ensure(self, investigation_id: str, *, resumed: bool = False) -> None:
+        """Start a driver for this investigation unless one is already running (then a no-op,
+        ``resumed`` included). ``resumed`` (the startup sweep, FR-127) only changes the driver's
+        first tick: poll before any deadline is applied."""
         if self._stopped:
             return
         current = self._drivers.get(investigation_id)
         if current is not None and not current.done():
             return
         self._drivers[investigation_id] = asyncio.create_task(
-            self._drive(investigation_id), name=f"driver-{investigation_id}"
+            self._drive(investigation_id, resumed=resumed), name=f"driver-{investigation_id}"
         )
 
     def active(self) -> set[str]:
@@ -170,9 +177,10 @@ class Poller:
 
     # -- driver ---------------------------------------------------------------------------------
 
-    async def _drive(self, investigation_id: str) -> None:
+    async def _drive(self, investigation_id: str, *, resumed: bool = False) -> None:
         manifest: ScenarioManifest | None = None
         dispatched = False
+        poll_first = resumed  # FR-127: the first tick polls before it applies any deadline
         while True:
             try:
                 if self.is_leader():
@@ -188,7 +196,20 @@ class Poller:
                             )
                     tasks = await self.repo.task_records(investigation_id)
                     # Tick order: (1) investigation deadline (FR-123), (2) task deadlines,
-                    # (3) re-dispatch (FR-121), then dispatch, poll, finish.
+                    # (3) re-dispatch (FR-121), then dispatch, poll, finish. A resumed driver's
+                    # first tick is dispatch, poll, then (1)-(3): what an agent finished while we
+                    # were down is kept, and only a task with no terminal answer is timed out.
+                    polled_first = False
+                    if poll_first:
+                        poll_first = False
+                        polled_first = True
+                        if manifest is not None and self.clock.now() < inv.deadline:
+                            # Past the investigation deadline nothing is re-POSTed (FR-123).
+                            dispatched = await self._dispatch_pending(
+                                inv, tasks, manifest, dispatched
+                            )
+                        await self._poll_open(inv, investigation_id)
+                        tasks = await self.repo.task_records(investigation_id)
                     if self.clock.now() >= inv.deadline:
                         await self._deadline(inv, tasks)
                         return  # ended, or someone else already ended it: either way we are done
@@ -201,24 +222,9 @@ class Poller:
                         await asyncio.gather(*(self._redispatch(t, inv, manifest) for t in retry))
                         tasks = await self.repo.task_records(investigation_id)
                     if manifest is not None:
-                        # First leader tick: every PENDING task (a resume re-POSTs, F2). After
-                        # that only a re-dispatched one (attempt > 1): a first-attempt task the
-                        # agent could not be reached for stays PENDING until its deadline (G13).
-                        pending = [
-                            t
-                            for t in tasks
-                            if t.status is OrchestratorTaskState.PENDING
-                            and (not dispatched or t.attempt > FIRST_ATTEMPT)
-                        ]
-                        await asyncio.gather(
-                            *(self.dispatcher.dispatch(inv, t, manifest) for t in pending)
-                        )
-                        dispatched = dispatched or self.is_leader()  # lost it mid-way: retry
-                        tasks = await self.repo.task_records(investigation_id)
-                    polled = [t for t in tasks if t.status in POLLED_STATES]
-                    await asyncio.gather(
-                        *(self._poll_one(t, inv.trace_context_json) for t in polled)
-                    )
+                        dispatched = await self._dispatch_pending(inv, tasks, manifest, dispatched)
+                    if not polled_first:
+                        await self._poll_open(inv, investigation_id)
                     if await self._maybe_finish(investigation_id, manifest):
                         return
             except asyncio.CancelledError:
@@ -226,6 +232,31 @@ class Poller:
             except Exception:
                 log.exception("driver tick failed", extra={"investigation_id": investigation_id})
             await self.clock.sleep(self._sleep_seconds())
+
+    async def _dispatch_pending(
+        self,
+        inv: InvestigationRecord,
+        tasks: list[TaskRecord],
+        manifest: ScenarioManifest,
+        dispatched: bool,
+    ) -> bool:
+        """POST the PENDING tasks. First leader tick: every one (a resume re-POSTs, F2). After
+        that only a re-dispatched one (attempt > 1): a first-attempt task the agent could not be
+        reached for stays PENDING until its deadline (G13). Returns the new ``dispatched``."""
+        pending = [
+            t
+            for t in tasks
+            if t.status is OrchestratorTaskState.PENDING
+            and (not dispatched or t.attempt > FIRST_ATTEMPT)
+        ]
+        await asyncio.gather(*(self.dispatcher.dispatch(inv, t, manifest) for t in pending))
+        return dispatched or self.is_leader()  # lost it mid-way: retry
+
+    async def _poll_open(self, inv: InvestigationRecord, investigation_id: str) -> None:
+        """One poll of every DISPATCHED/RUNNING task (re-read: the dispatch step moved some)."""
+        tasks = await self.repo.task_records(investigation_id)
+        polled = [t for t in tasks if t.status in POLLED_STATES]
+        await asyncio.gather(*(self._poll_one(t, inv.trace_context_json) for t in polled))
 
     async def _deadline(self, inv: InvestigationRecord, tasks: list[TaskRecord]) -> None:
         """FR-123: the investigation is out of time. PARTIAL if a specialist COMPLETED, else
@@ -280,7 +311,26 @@ class Poller:
             return  # nothing changed: no write, no event, no span (F9)
         if outcome is PollFailure.NOT_FOUND:
             log.warning("agent lost an acknowledged task", extra={"task_id": task.id})
-        await self._record(task, update, result, trace_context_json)
+        applied = await self._record(task, update, result, trace_context_json)
+        if applied is Applied.APPLIED and update.state is OrchestratorTaskState.COMPLETED:
+            await self._check_budget(task.investigation_id)
+
+    async def _check_budget(self, investigation_id: str) -> None:
+        """FR-128: after a COMPLETED task, is what is left under the analysis minimum? Analysis is
+        not enabled in S3, so this is only logged; S4 turns it into ``PARTIAL(budget_exceeded)``."""
+        cap = self.settings.nexus_max_tokens_per_investigation
+        used = budget.tokens_used(await self.repo.task_records(investigation_id))
+        if budget.analysis_budget_short(cap, used, self.settings.min_analysis_tokens):
+            log.info(
+                "analysis budget short",
+                extra={
+                    "investigation_id": investigation_id,
+                    "cap": cap,
+                    "used": used,
+                    "remaining": cap - used,
+                    "min": self.settings.min_analysis_tokens,
+                },
+            )
 
     async def _time_out(self, task: TaskRecord) -> None:
         """FR-120: ``task`` is past its deadline → TIMED_OUT(deadline_exceeded), version guarded.
