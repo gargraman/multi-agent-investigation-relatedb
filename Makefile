@@ -11,7 +11,7 @@ COMPOSE = docker compose -f infrastructure/docker/compose.yaml --env-file .env
 
 .PHONY: help sync test lint fmt schemas schemas-check \
         secrets up down ready reset spike-linux up-obs demo demo-replay backup e2e e2e-replay \
-        logs smoke-live
+        logs smoke-live chaos
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -98,6 +98,13 @@ e2e-replay: .env ## (S3a) agents in replay mode, 3-scenario E2E, agents restored
 	echo "  task finished: $$done_n   OpenAI calls (llm call done): $$live   replay misses: $$miss"; \
 	if [ "$$live" != 0 ] || [ "$$miss" != 0 ]; then echo "FAIL: model calls or replay misses in replay E2E" >&2; rc=1; fi; \
 	exit $$rc
+
+# Real containers, replay mode, compose.chaos.yaml (deadline 45 s, 20 s replay delay). Breaks one
+# thing per scenario (stop/restart/kill) and asserts recovery. ~5-6 min. Restores the default
+# config on exit, like e2e-replay. Subset: make chaos CHAOS_SCENARIOS="ac12a ac13c".
+CHAOS_SCENARIOS ?=
+chaos: .env ## (S3b) AC12-a, AC13-a/b/c against real containers in replay mode
+	@scripts/chaos.sh $(CHAOS_SCENARIOS)
 
 spike-linux: .env ## ADR-001 R5: Relate spike suite inside the Linux Context Service image
 	scripts/spike_linux.sh

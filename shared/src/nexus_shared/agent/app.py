@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 
 def build_provider(settings: AgentSettings) -> LLMProvider:
     if settings.nexus_llm_mode is LlmMode.REPLAY:
-        return ReplayLLMProvider(settings.replay_dir)
+        return ReplayLLMProvider(settings.replay_dir, latency_ms=settings.replay_latency_ms)
     from nexus_shared.llm import OpenAIProvider, build_ssl_context
 
     assert settings.openai_api_key is not None  # enforced by settings validation

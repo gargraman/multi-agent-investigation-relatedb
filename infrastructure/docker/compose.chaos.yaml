@@ -1,0 +1,25 @@
+# Chaos override for `make chaos` (S3b, spec §14 AC12/AC13, §18). Layer it over compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.chaos.yaml ...
+#
+# - Task deadline 45 s instead of 180 s: AC12-a ends in ~2 x 45 s instead of ~360 s, because the
+#   retry wait window is derived from the task deadline (FR-121).
+# - Both agents in replay mode with a 20 s delay after every replay hit: longer than a container
+#   restart/kill window, shorter than the 45 s deadline, so there is a mid-task moment to break.
+#   The delay never changes replay output, and settings refuse it in live mode.
+#
+# Never layer this over a live-mode stack; it is for local chaos runs only.
+services:
+  orchestrator:
+    environment:
+      NEXUS_TASK_DEADLINE_SECONDS: "45"
+
+  sigint-agent:
+    environment:
+      NEXUS_LLM_MODE: replay
+      NEXUS_REPLAY_LATENCY_MS: "20000"
+
+  geoint-agent:
+    environment:
+      NEXUS_LLM_MODE: replay
+      NEXUS_REPLAY_LATENCY_MS: "20000"

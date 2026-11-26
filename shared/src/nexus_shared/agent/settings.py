@@ -7,6 +7,7 @@ Env vars (no prefix): ``SERVICE_TOKEN`` (this agent's own token, sent to the Con
 ``NEXUS_TOKEN_ORCHESTRATOR`` (the only token accepted on ``/v1/tasks``; read by
 ``load_token_registry``), ``CONTEXT_SERVICE_URL``, ``SQLITE_PATH``, ``SCENARIOS_DIR``,
 ``FIXTURES_DIR``, ``NEXUS_LLM_MODE`` (live|replay, no runtime switch), ``REPLAY_DIR``,
+``NEXUS_REPLAY_LATENCY_MS`` (chaos only, default 0, refused in live mode),
 ``OPENAI_API_KEY`` (required in live mode), ``OPENAI_MODEL_EXTRACT``, ``OPENAI_TIMEOUT_SECONDS``,
 ``OPENAI_MAX_RETRIES``, ``OPENAI_REASONING_EFFORT`` (optional), ``EXTRA_CA_FILE`` (optional).
 
@@ -24,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 
 from nexus_contracts.common import LlmMode
 from nexus_shared.config import ServiceSettings
@@ -42,6 +43,12 @@ class AgentSettings(ServiceSettings):
 
     nexus_llm_mode: LlmMode = LlmMode.LIVE
     replay_dir: Path = Path("data/replay")
+    # S3b chaos only: fixed delay after a replay hit. Refused in live mode (see validator).
+    replay_latency_ms: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("NEXUS_REPLAY_LATENCY_MS", "replay_latency_ms"),
+    )
     openai_api_key: SecretStr | None = None
     openai_model_extract: str = DEFAULT_MODEL
     openai_timeout_seconds: float = Field(default=45.0, gt=0)
@@ -62,6 +69,8 @@ class AgentSettings(ServiceSettings):
             self.openai_api_key is None or not self.openai_api_key.get_secret_value().strip()
         ):
             raise ValueError("OPENAI_API_KEY is required when NEXUS_LLM_MODE=live")
+        if self.nexus_llm_mode is LlmMode.LIVE and self.replay_latency_ms > 0:
+            raise ValueError("NEXUS_REPLAY_LATENCY_MS must be 0 when NEXUS_LLM_MODE=live")
         return self
 
 

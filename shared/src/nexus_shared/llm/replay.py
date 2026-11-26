@@ -6,14 +6,15 @@ Recording file: ``<replay_root>/<agent_id>/<scenario_id>/<key>.json`` =
 - ``response`` is the model output as JSON (or the raw text when it was not JSON), so a recorded
   *invalid* output replays the same failure and the repair call (``call_ordinal`` 1) replays too.
 - ``usage`` is ``{input_tokens, output_tokens, llm_calls}`` of the recorded call. Replay reports it
-  with ``replayed: true`` so the budget path still runs (E7). Latency is real file-read time,
-  never simulated.
+  with ``replayed: true`` so the budget path still runs (E7). Latency is real file-read time by
+  default; ``latency_ms`` (S3b, ``make chaos`` only) adds a fixed delay after a hit, nothing else.
 - No headers, no auth, no key: only the four members above are ever written (E8). ``write``
   additionally refuses any file that matches an API-key pattern.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -43,8 +44,9 @@ def recording_path(replay_root: Path, agent_id: str, scenario_id: str, key: str)
 class ReplayLLMProvider:
     """Serves recorded responses. Selected only by ``NEXUS_LLM_MODE=replay``; never a fallback."""
 
-    def __init__(self, replay_root: Path) -> None:
+    def __init__(self, replay_root: Path, *, latency_ms: int = 0) -> None:
         self.replay_root = replay_root
+        self.latency_ms = latency_ms  # chaos only: gives `make chaos` a mid-task window
 
     async def generate_structured(
         self,
@@ -74,6 +76,9 @@ class ReplayLLMProvider:
         record = json.loads(path.read_text(encoding="utf-8"))
         if replay_key(record.get("key_material", {})) != key:
             raise ReplayMissError(key, material)  # stored material does not match its file name
+        latency_ms = int((time.monotonic() - started) * 1000)  # real read time, delay excluded
+        if self.latency_ms > 0:
+            await asyncio.sleep(self.latency_ms / 1000)
         u = record["usage"]
         usage = TaskUsage(
             input_tokens=int(u["input_tokens"]),
@@ -88,7 +93,6 @@ class ReplayLLMProvider:
             raise LLMOutputInvalidError(
                 exc.reason, usage=usage, model_id=model_id, raw_response=exc.raw
             ) from None
-        latency_ms = int((time.monotonic() - started) * 1000)
         return LLMResult(output=output, usage=usage, model_id=model_id, latency_ms=latency_ms)
 
 

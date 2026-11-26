@@ -84,3 +84,13 @@ def test_orchestrator_enables_both_specialists(services: dict) -> None:
     }
     assert orch["depends_on"]["geoint-agent"] == {"condition": "service_healthy"}
     assert orch["depends_on"]["sigint-agent"] == {"condition": "service_healthy"}
+
+
+def test_chaos_override_only_sets_environment() -> None:
+    """compose.chaos.yaml must not add mounts, networks or ports (AC5 holds with it layered on)."""
+    chaos = yaml.safe_load((COMPOSE.parent / "compose.chaos.yaml").read_text())
+    assert set(chaos) == {"services"}
+    for name, svc in chaos["services"].items():
+        assert set(svc) == {"environment"}, name
+    agents = [s for n, s in chaos["services"].items() if n.endswith("-agent")]
+    assert agents and all(s["environment"]["NEXUS_LLM_MODE"] == "replay" for s in agents)
