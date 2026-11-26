@@ -12,6 +12,7 @@ Two ``FakeAgent`` doubles sit behind one host-routing transport. The driver slee
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import Awaitable, Callable
 
@@ -349,3 +350,113 @@ async def test_stop_one_from_inside_the_driver_does_not_deadlock(make_two) -> No
 
         poller._drivers["inv_self"] = asyncio.create_task(driver())
         await asyncio.wait_for(poller._drivers["inv_self"], timeout=1.0)
+
+
+async def test_stop_one_is_bounded_when_the_driver_ignores_cancel(make_two) -> None:
+    clock = FakeClock(utcnow())
+    app = make_two(held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService(), clock)
+    async with running(app):
+        poller = runtime(app).poller
+        release = asyncio.Event()
+
+        async def stubborn() -> None:
+            while not release.is_set():
+                with contextlib.suppress(asyncio.CancelledError):  # stuck in a step that ignores it
+                    await release.wait()
+
+        poller._drivers["inv_stuck"] = asyncio.create_task(stubborn())
+        await asyncio.sleep(0)
+        started = time.monotonic()
+        await poller.stop_one("inv_stuck")
+        elapsed = time.monotonic() - started
+        release.set()
+
+    assert elapsed < 1.0, elapsed  # bounded by cancel_step_timeout_seconds (0.05), not forever
+
+
+# -- review fixes: in-flight work that lands after the fence -------------------------------------
+
+
+async def test_submit_in_flight_during_cancel_is_cancelled_at_the_agent(make_two) -> None:
+    """I1: the dispatch POST is in flight when the fence runs. The fence's agent cancel reaches
+    the agent first (it does not know the task yet), then the submit lands. The dispatcher's ack
+    write is dropped (row already CANCELLED), so it must cancel the agent side itself."""
+    clock = FakeClock(utcnow())
+    sig, geo, ctx = held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService()
+    sig.submit_gate = asyncio.Event()
+    app = make_two(sig, geo, ctx, clock)
+    async with running(app) as client:
+        inv_id = await create(client)
+        await wait_until(_entered(sig))
+        rt = runtime(app)
+        task_id = (await by_agent(app, inv_id))[AgentId.SIGINT].id
+
+        result = await rt.fence.end(inv_id, I.CANCELLED, None, task_reason=None)
+        assert result.applied
+        assert sig.log == [f"cancel:{task_id}"]  # the submit has not landed yet
+
+        sig.submit_gate.set()
+        await wait_until(_log_len(sig, 3))
+        row = (await by_agent(app, inv_id))[AgentId.SIGINT]
+
+    assert sig.log == [f"cancel:{task_id}", f"submit:{task_id}", f"cancel:{task_id}"]
+    assert row.status is T.CANCELLED
+
+
+def _entered(agent: FakeAgent) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        return agent.submit_entered >= 1
+
+    return check
+
+
+def _log_len(agent: FakeAgent, n: int) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        return len(agent.log) >= n
+
+    return check
+
+
+async def test_register_in_flight_during_cancel_is_closed_afterwards(make_two) -> None:
+    """I2: the Context Service create is in flight when the cancel lands (the fence's close sees
+    nothing registered yet and counts it as closed). When the create then lands, the record would
+    stay open forever (the reconciler only selects context_closed = 0), so the registration path
+    closes it again, and the investigation is not started."""
+    clock = FakeClock(utcnow())
+    sig, geo, ctx = held(AgentId.SIGINT), held(AgentId.GEOINT), FakeContextService()
+    ctx.create_gate = asyncio.Event()
+    app = make_two(sig, geo, ctx, clock)
+    async with running(app) as client:
+        rt = runtime(app)
+        creating = asyncio.create_task(create(client))
+        await wait_until(_create_entered(ctx))
+        [inv_id] = await rt.repo.list_ids_with_status(I.CREATED)
+
+        resp = await client.post(cancel_url(inv_id))
+        assert resp.status_code == 200, resp.text
+        assert ctx.log == [f"close:{inv_id}"]  # the create has not landed yet
+
+        ctx.create_gate.set()
+        assert await creating == inv_id
+        await wait_until(_ctx_log_len(ctx, 3))
+        record = await rt.repo.investigation_record(inv_id)
+        tasks = await by_agent(app, inv_id)
+
+    assert ctx.log == [f"close:{inv_id}", f"create:{inv_id}", f"close:{inv_id}"]
+    assert ctx.closes == [(inv_id, "CANCELLED"), (inv_id, "CANCELLED")]
+    assert record is not None and record.status is I.CANCELLED
+    assert tasks == {} and sig.submits == []  # never started
+
+
+def _create_entered(ctx: FakeContextService) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        return ctx.create_entered >= 1
+
+    return check
+
+
+def _ctx_log_len(ctx: FakeContextService, n: int) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        return len(ctx.log) >= n
+
+    return check

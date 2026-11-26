@@ -161,7 +161,14 @@ class Poller:
             return
         del self._drivers[investigation_id]
         task.cancel()
-        await asyncio.wait({task})  # unlike ``await task``: never re-raises the driver's outcome
+        # Unlike ``await task`` this never re-raises the driver's outcome, and it is bounded: a
+        # driver stuck in a step that ignores cancellation must not hold the cancel response.
+        _, pending = await asyncio.wait({task}, timeout=self.settings.cancel_step_timeout_seconds)
+        if pending:
+            log.warning(
+                "driver did not stop in time after cancel",
+                extra={"investigation_id": investigation_id},
+            )
 
     async def stop(self) -> None:
         """Graceful shutdown (ADR-005 D5): cancel drivers, change no state."""

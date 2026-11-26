@@ -166,7 +166,8 @@ class InvestigationWorkflow:
         if result.outcome is RegistrationOutcome.REGISTERED:
             self.pending_registration.discard(investigation_id)
             log.info("investigation registered with Context Service", extra=extra)
-            await self.begin(investigation_id, manifest)
+            if not await self.begin(investigation_id, manifest):
+                await self._close_late_registration(investigation_id)
         elif result.retryable:
             self.pending_registration.add(investigation_id)
             log.warning("Context Service create failed; will retry", extra=extra)
@@ -178,14 +179,40 @@ class InvestigationWorkflow:
 
     # -- begin (FR-002, G1) --------------------------------------------------------------------
 
-    async def begin(self, investigation_id: str, manifest: ScenarioManifest) -> None:
-        """CREATED → RUNNING plus the task rows, in one transaction; then hand to the poller."""
+    async def _close_late_registration(self, investigation_id: str) -> None:
+        """The Context Service create landed, but the investigation had already ended (cancelled
+        while the create was in flight). The fence's close saw nothing registered (404, which
+        counts as closed, so ``context_closed = 1`` and FR-126 never revisits it); close the
+        record that has just appeared. Best effort: log and carry on."""
+        record = await self.repo.investigation_record(investigation_id)
+        if record is None or not record.status.is_terminal:
+            return
+        try:
+            closed = await self.context.close(
+                investigation_id,
+                record.status,
+                timeout=self.settings.context_service_timeout_seconds,
+            )
+        except Exception:
+            closed = False
+            log.exception(
+                "late Context Service close failed", extra={"investigation_id": investigation_id}
+            )
+        if not closed:
+            log.warning(
+                "could not close a late-registered Context Service record",
+                extra={"investigation_id": investigation_id, "status": record.status.value},
+            )
+
+    async def begin(self, investigation_id: str, manifest: ScenarioManifest) -> bool:
+        """CREATED → RUNNING plus the task rows, in one transaction; then hand to the poller.
+        False when it was not CREATED any more (started by a racing retrier, or already ended)."""
         enabled = set(self.settings.nexus_enabled_agents)
         now = self.clock.now()
         async with self.db.transaction() as tx:
             inv = await self.repo.tx_investigation_record(tx, investigation_id)
             if inv is None or inv.status is not InvestigationStatus.CREATED:
-                return  # already started (e.g. a racing retrier) or ended
+                return False  # already started (e.g. a racing retrier) or ended
             skipped = [t.agent for t in manifest.template.tasks if t.agent not in enabled]
             await self.repo.transition_investigation(
                 tx, investigation_id, InvestigationStatus.RUNNING, now=now, skipped_agents=skipped
@@ -227,6 +254,7 @@ class InvestigationWorkflow:
         )
         if decision is None:
             self.poller.ensure(investigation_id)
+        return True
 
     # -- resume (ADR-002 A1) ------------------------------------------------------------------
 

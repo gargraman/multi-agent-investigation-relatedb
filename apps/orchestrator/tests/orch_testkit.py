@@ -118,7 +118,8 @@ class FakeContextService:
     ``POST /v1/investigations/{id}/close`` records ``(id, status)`` in ``closes`` and answers 200;
     ``close_hangs = True`` makes it never answer (a Context Service that is up but stuck).
     ``journal``, when set, gets ``"close"`` appended per close call, so a test can check the
-    order against the agents' cancels (give both doubles the same list).
+    order against the agents' cancels (give both doubles the same list). ``create_gate`` (an
+    ``asyncio.Event``) holds the registration POST until set; ``log`` records processing order.
     """
 
     def __init__(self, up: bool = True) -> None:
@@ -128,6 +129,9 @@ class FakeContextService:
         self.closes: list[tuple[str, str]] = []
         self.close_hangs = False
         self.journal: list[str] | None = None
+        self.log: list[str] = []  # "create:<id>" / "close:<id>", in the order they were processed
+        self.create_gate: asyncio.Event | None = None  # holds POST /v1/investigations until set
+        self.create_entered = 0  # creates that reached the double (before the gate)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if not self.up:
@@ -137,6 +141,7 @@ class FakeContextService:
             return httpx.Response(200, json={"status": "ready"})
         if request.method == "POST" and request.url.path == "/v1/investigations":
             body = json.loads(request.content)
+            self.log.append(f"create:{body['investigation_id']}")
             created = body["investigation_id"] not in self.registered
             self.registered[body["investigation_id"]] = body
             return httpx.Response(
@@ -152,6 +157,7 @@ class FakeContextService:
             inv_id = request.url.path.split("/")[3]
             status = json.loads(request.content)["status"]
             self.closes.append((inv_id, status))
+            self.log.append(f"close:{inv_id}")
             if self.journal is not None:
                 self.journal.append("close")
             closed_at = utcnow().isoformat()
@@ -174,6 +180,14 @@ class FakeContextService:
     async def _serve(self, request: httpx.Request) -> httpx.Response:
         if self.close_hangs and request.url.path.endswith("/close"):
             await asyncio.Event().wait()  # until the caller's timeout cancels us
+        if (
+            self.up
+            and request.method == "POST"
+            and request.url.path == "/v1/investigations"
+            and self.create_gate is not None
+        ):
+            self.create_entered += 1
+            await self.create_gate.wait()
         return self.handler(request)
 
     @property
@@ -196,6 +210,8 @@ class FakeAgent:
       404 for unknown ids (``forget()`` simulates an agent that lost its state).
     - ``POST /v1/tasks/{id}/cancel``: records the id in ``cancels``; the scripted status is left
       alone (the orchestrator has already moved on, which is what the tests look at).
+      ``submit_gate`` (an ``asyncio.Event``) holds ``POST /v1/tasks`` until set (a submit that is
+      in flight while something else happens); ``log`` records submit/cancel landing order.
       ``hang_cancel = True`` makes it never answer. ``journal``, when set, gets
       ``"cancel:<task_id>"`` appended per call (share one list with ``FakeContextService``).
     - ``GET /readyz``: 200, or 503 while ``ready = False`` (the re-dispatch gate, FR-121).
@@ -232,6 +248,9 @@ class FakeAgent:
         self.cancels: list[str] = []  # task ids of every ``POST /v1/tasks/{id}/cancel``
         self.hang_cancel = False
         self.journal: list[str] | None = None
+        self.log: list[str] = []  # "submit:<id>" / "cancel:<id>", in the order they landed
+        self.submit_gate: asyncio.Event | None = None  # holds POST /v1/tasks until set
+        self.submit_entered = 0  # submits that reached the agent (before the gate)
         self.card_reads = 0
         self.app = self._build()
 
@@ -310,6 +329,10 @@ class FakeAgent:
                 return JSONResponse({"title": "Unauthorized", "status": 401}, status_code=401)
             raw = await request.body()
             body = TaskRequest.model_validate_json(raw)
+            if fake.submit_gate is not None:
+                fake.submit_entered += 1
+                await fake.submit_gate.wait()
+            fake.log.append(f"submit:{body.task_id}")
             digest = hashlib.sha256(
                 json.dumps(json.loads(raw), sort_keys=True).encode()
             ).hexdigest()
@@ -354,6 +377,7 @@ class FakeAgent:
             if request.headers.get("authorization") != f"Bearer {TOKEN}":
                 return JSONResponse({"title": "Unauthorized", "status": 401}, status_code=401)
             fake.cancels.append(task_id)
+            fake.log.append(f"cancel:{task_id}")
             if fake.journal is not None:
                 fake.journal.append(f"cancel:{task_id}")
             if fake.hang_cancel:

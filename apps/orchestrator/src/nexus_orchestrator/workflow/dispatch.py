@@ -51,7 +51,12 @@ from nexus_orchestrator.delegation.agent_client import AgentClient, SubmitKind, 
 from nexus_orchestrator.ids import iso
 from nexus_orchestrator.settings import OrchestratorSettings
 from nexus_orchestrator.state.db import Database
-from nexus_orchestrator.state.repository import InvestigationRecord, Repository, TaskRecord
+from nexus_orchestrator.state.repository import (
+    Applied,
+    InvestigationRecord,
+    Repository,
+    TaskRecord,
+)
 
 log = logging.getLogger(__name__)
 
@@ -197,9 +202,23 @@ class Dispatcher:
             return
         now = self.clock.now()
         async with self.db.transaction() as tx:
-            await self.repo.transition_task(
+            applied = await self.repo.transition_task(
                 tx, task, OrchestratorTaskState.DISPATCHED, now=now, fields={"acked_at": iso(now)}
             )
+        if applied is Applied.DROPPED:
+            # The row moved on while the submit was in flight (cancelled by the fence, or timed
+            # out), so nobody else knows the agent now holds this task: stop it ourselves.
+            await self._cancel_orphan(task)
+
+    async def _cancel_orphan(self, task: TaskRecord) -> None:
+        log.warning(
+            "task moved on while its submit was in flight; cancelling it at the agent",
+            extra={"task_id": task.id, "agent_id": task.agent_id.value},
+        )
+        try:
+            await self.agents.cancel(task.agent_id, task.id)  # best effort, never raises
+        except Exception:
+            log.warning("orphan cancel failed", extra={"task_id": task.id}, exc_info=True)
 
     async def _fail(self, task: TaskRecord, code: ErrorCode) -> None:
         async with self.db.transaction() as tx:
