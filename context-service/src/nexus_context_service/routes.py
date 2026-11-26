@@ -18,6 +18,7 @@ from nexus_context_service.repository import (
     InvestigationClosed,
     InvestigationContentConflict,
     InvestigationNotFound,
+    TaskOwnedByOtherCaller,
 )
 from nexus_contracts.api.context import (
     ContextInvestigationClose,
@@ -149,6 +150,7 @@ def _problem_doc(model: type, description: str) -> dict:
     responses={
         200: {"description": "Identical batch replayed for this task_id: original finding ids"},
         404: _problem_doc(ProblemDetails, "Unknown investigation"),
+        403: _problem_doc(ProblemDetails, "caller not allowed, or task_id owned by another caller"),
         409: _problem_doc(
             AlreadyCommittedProblem,
             "already_committed (different content; carries the committed finding_ids) or "
@@ -170,6 +172,10 @@ async def submit_findings(
         result = await repo.submit_finding_batch(body, audit)
     except InvestigationNotFound as exc:
         raise ProblemError(404, "investigation not found") from exc
+    except TaskOwnedByOtherCaller as exc:
+        raise ProblemError(
+            403, "task_id belongs to another caller", code=ErrorCode.FORBIDDEN
+        ) from exc
     except AlreadyCommitted as exc:
         raise ProblemError(
             409,

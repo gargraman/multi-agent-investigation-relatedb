@@ -16,12 +16,11 @@ from nexus_shared.security import ORCHESTRATOR, TokenRegistry, token_env_var
 
 DURABILITY_ENV = "RELATE_DURABILITY_MODE"
 
-# Callers whose bearer tokens this service requires at startup (S2 FR-045).
-ACCEPTED_CALLERS: tuple[str, ...] = (ORCHESTRATOR, "sigint-agent")
-# Callers whose tokens are accepted when configured, but not required yet: geoint-agent submits
-# findings from S3 on. Kept optional so an S2 stack without a GEOINT token still starts.
+# Callers whose bearer tokens this service requires at startup (S2 FR-045; geoint-agent from S3).
+ACCEPTED_CALLERS: tuple[str, ...] = (ORCHESTRATOR, "sigint-agent", "geoint-agent")
+# Callers whose tokens are accepted when configured, but not required.
 # TODO(S4): analysis-agent (search/assessments/context with clearance filtering, spec §9.5).
-OPTIONAL_CALLERS: tuple[str, ...] = ("geoint-agent",)
+OPTIONAL_CALLERS: tuple[str, ...] = ()
 
 
 class DurabilityModeError(RuntimeError):

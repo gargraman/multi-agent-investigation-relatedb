@@ -66,11 +66,16 @@ class InvestigationClosed(Exception):
 
 
 class AlreadyCommitted(Exception):
-    """A batch for this task was committed with different content (or by another caller)."""
+    """A batch for this task was committed by the same caller with different content."""
 
     def __init__(self, finding_ids: list[str]) -> None:
         super().__init__("already committed")
         self.finding_ids = finding_ids
+
+
+class TaskOwnedByOtherCaller(Exception):
+    """This task_id was committed by a different caller (S3 FR-130). Carries nothing: the other
+    caller's finding ids and identity must not reach the response."""
 
 
 class BatchInvalid(Exception):
@@ -337,11 +342,9 @@ class GraphRepository:
                 raise InvestigationNotFound(inv)
             head = dict(rows[0])
             if head["finding_ids"] is not None:  # this task already committed (before fence, G15)
-                same = (
-                    head["content_hash"] == content_hash
-                    and head["sub_inv"] == inv
-                    and head["sub_caller"] == caller
-                )
+                if head["sub_caller"] != caller:  # caller-scoped idempotency, checked first
+                    raise TaskOwnedByOtherCaller()
+                same = head["content_hash"] == content_hash and head["sub_inv"] == inv
                 if same:
                     return BatchResult(finding_ids=list(head["finding_ids"]), created=False)
                 raise AlreadyCommitted(list(head["finding_ids"]))

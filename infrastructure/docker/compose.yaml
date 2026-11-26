@@ -30,6 +30,7 @@ services:
       SERVICE_TOKEN: ${NEXUS_TOKEN_CONTEXT_SERVICE:?run make secrets}
       NEXUS_TOKEN_ORCHESTRATOR: ${NEXUS_TOKEN_ORCHESTRATOR:?run make secrets}
       NEXUS_TOKEN_SIGINT_AGENT: ${NEXUS_TOKEN_SIGINT_AGENT:?run make secrets}
+      NEXUS_TOKEN_GEOINT_AGENT: ${NEXUS_TOKEN_GEOINT_AGENT:?run make secrets}
       RELATE_STORE_PATH: /data/relate
     volumes:
       - relate-store:/data          # only this service mounts the store (AC5)

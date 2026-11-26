@@ -194,6 +194,76 @@ async def test_same_task_id_from_other_investigation_conflicts(client) -> None:
     assert body["finding_ids"] == r1.json()["finding_ids"]
 
 
+def _geoint_finding(person: str = "ENT-CHARLIE", cell: str = "LOC-GRID-09") -> dict[str, Any]:
+    """A valid GEOINT finding: OBSERVATION with one PLACED_AT assertion (DEMO-MID)."""
+    f = finding(evidence=("ev-geo-001",), classification="DEMO-MID")
+    f["evidence"] = [evidence_ref("ev-geo-001", owner="geoint-agent")]
+    f["about"] = [person, cell]
+    f["statement"] = f"{person} was placed at {cell}."
+    f["prompt_version"] = "geoint-classify@1.0.0"
+    f["assertions"] = [
+        {
+            "type": "PLACED_AT",
+            "subject": person,
+            "location": cell,
+            "valid_from": f["valid_from"],
+            "valid_until": f["valid_until"],
+        }
+    ]
+    return f
+
+
+async def test_geoint_agent_batch_with_placed_at_accepted(client, app: FastAPI) -> None:
+    await _create(client, "inv_geo_ok")
+    body = batch_body("inv_geo_ok", task_id="tsk_geo", findings=[_geoint_finding()])
+    r = await client.post(URL, json=body, headers=GEOINT)
+    assert r.status_code == 201, r.text
+    [fid] = FindingBatchResponse.model_validate(r.json()).finding_ids
+    [row] = await read(
+        app,
+        "MATCH (f:Finding {id:$fid})-[:ASSERTS]->(a:Assertion {type:'PLACED_AT'}) "
+        "RETURN f.source_agent_id AS agent, a.type AS type",
+        {"fid": fid},
+    )
+    assert row == {"agent": "geoint-agent", "type": "PLACED_AT"}
+    [audit] = await read(
+        app, "MATCH (a:AuditEvent {operation:'findings.submit'}) RETURN a.caller AS caller"
+    )
+    assert audit["caller"] == "geoint-agent"
+
+
+async def test_same_task_id_from_other_caller_is_403_without_ids(client, app: FastAPI) -> None:
+    await _create(client, "inv_scope")
+    r1 = await client.post(URL, json=batch_body("inv_scope", task_id="tsk_X"), headers=SIGINT)
+    assert r1.status_code == 201, r1.text
+    snapshot = await _counts(app)
+
+    geo_body = batch_body("inv_scope", task_id="tsk_X", findings=[_geoint_finding()])
+    r2 = await client.post(URL, json=geo_body, headers=GEOINT)
+    problem = _problem(r2, 403, "forbidden")
+    assert "fnd_" not in r2.text and "finding_ids" not in problem
+    assert "sigint" not in r2.text.lower()
+    # Even an identical body from the other caller is refused (the key is caller-scoped).
+    r3 = await client.post(URL, json=batch_body("inv_scope", task_id="tsk_X"), headers=GEOINT)
+    _problem(r3, 403, "forbidden")
+    assert "fnd_" not in r3.text
+    assert await _counts(app) == snapshot  # nothing written
+
+    # The owner can still replay.
+    r4 = await client.post(URL, json=batch_body("inv_scope", task_id="tsk_X"), headers=SIGINT)
+    assert r4.status_code == 200 and r4.json()["finding_ids"] == r1.json()["finding_ids"]
+
+
+async def test_same_caller_replay_still_200(client) -> None:
+    await _create(client, "inv_geo_replay")
+    body = batch_body("inv_geo_replay", task_id="tsk_geo_r", findings=[_geoint_finding()])
+    r1 = await client.post(URL, json=body, headers=GEOINT)
+    assert r1.status_code == 201, r1.text
+    r2 = await client.post(URL, json=body, headers=GEOINT)
+    assert r2.status_code == 200, r2.text
+    assert r2.json() == r1.json()
+
+
 # --- fence (FR-042, G15) ---------------------------------------------------------------------
 
 
