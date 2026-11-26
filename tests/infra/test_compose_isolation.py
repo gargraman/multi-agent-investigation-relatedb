@@ -3,6 +3,7 @@
 Static checks on infrastructure/docker/compose.yaml. They prove the *configuration*, not runtime
 isolation: Compose networks on one host simulate segmentation (spec §14.2)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -65,3 +66,40 @@ def test_read_only_data_mounts(services: dict) -> None:
         for v in svc.get("volumes", []):
             if isinstance(v, str) and "/data/" in v.split(":", 1)[0] and v.startswith("../"):
                 assert v.endswith(":ro"), (name, v)
+
+
+def _mount_targets(svc: dict) -> list[str]:
+    return [v for v in svc.get("volumes", []) if isinstance(v, str)]
+
+
+def test_geoint_mounts_only_own_fixtures_and_replay(services: dict) -> None:
+    mounts = _mount_targets(services["geoint-agent"])
+    assert any("data/fixtures/geoint:" in m for m in mounts)
+    assert any("data/replay/geoint-agent:" in m for m in mounts)
+    for m in mounts:
+        assert "fixtures/sigint" not in m, m
+        assert "replay/sigint-agent" not in m, m
+        assert "fixtures/analysis" not in m, m
+        assert "replay/analysis-agent" not in m, m
+
+
+def test_sigint_mounts_no_geoint_data(services: dict) -> None:
+    for m in _mount_targets(services["sigint-agent"]):
+        assert "fixtures/geoint" not in m, m
+        assert "replay/geoint-agent" not in m, m
+
+
+def test_geoint_networks_are_context_and_egress(services: dict) -> None:
+    assert sorted(services["geoint-agent"]["networks"]) == ["nexus-context", "nexus-egress"]
+
+
+def test_orchestrator_enables_both_specialists(services: dict) -> None:
+    orch = services["orchestrator"]
+    env = orch["environment"]
+    assert env["NEXUS_ENABLED_AGENTS"] == "sigint-agent,geoint-agent"
+    assert json.loads(env["NEXUS_AGENT_URLS"]) == {
+        "sigint-agent": "http://sigint-agent:8000",
+        "geoint-agent": "http://geoint-agent:8000",
+    }
+    assert orch["depends_on"]["geoint-agent"] == {"condition": "service_healthy"}
+    assert orch["depends_on"]["sigint-agent"] == {"condition": "service_healthy"}

@@ -1,5 +1,5 @@
 # Nexus core stack, `lite` profile (spec §16). No observability container here: the LGTM
-# overlay (compose.observability.yaml) arrives in S6. SIGINT joins in S2; GEOINT/analysis in S3/S4.
+# overlay (compose.observability.yaml) arrives in S6. SIGINT joins in S2, GEOINT in S3; analysis in S4.
 #
 #   make secrets && make up      # from the repo root
 #
@@ -57,8 +57,8 @@ services:
       # S1: nothing leaves CREATED until the workflow lands (S3), so the spec default of 2 would
       # block the third create. Restore the default of 2 in S3.
       NEXUS_MAX_CONCURRENT_INVESTIGATIONS: ${NEXUS_MAX_CONCURRENT_INVESTIGATIONS:-20}
-      NEXUS_ENABLED_AGENTS: sigint-agent
-      NEXUS_AGENT_URLS: '{"sigint-agent":"http://sigint-agent:8000"}'
+      NEXUS_ENABLED_AGENTS: sigint-agent,geoint-agent
+      NEXUS_AGENT_URLS: '{"sigint-agent":"http://sigint-agent:8000","geoint-agent":"http://geoint-agent:8000"}'
     volumes:
       - orchestrator-state:/data
       - ../../data/scenarios:/app/data/scenarios:ro   # manifests only; never fixtures
@@ -66,6 +66,7 @@ services:
     depends_on:
       context-service: {condition: service_healthy}
       sigint-agent: {condition: service_healthy}
+      geoint-agent: {condition: service_healthy}
     stop_grace_period: 15s
     deploy:
       resources:
@@ -111,6 +112,46 @@ services:
       resources:
         limits: {cpus: "1.0", memory: 512m}
 
+  geoint-agent:
+    build:
+      <<: *python-build
+      args:
+        PACKAGE: nexus-geoint
+        MODULE: nexus_geoint
+    image: nexus/geoint-agent:dev
+    environment:
+      <<: *common-env
+      SERVICE_NAME: geoint-agent
+      SERVICE_TOKEN: ${NEXUS_TOKEN_GEOINT_AGENT:?run make secrets}
+      NEXUS_TOKEN_ORCHESTRATOR: ${NEXUS_TOKEN_ORCHESTRATOR:?run make secrets}
+      CONTEXT_SERVICE_URL: http://context-service:8000
+      SQLITE_PATH: /data/geoint.sqlite
+      SCENARIOS_DIR: /app/data/scenarios
+      FIXTURES_DIR: /app/data/fixtures            # manifest `file:` paths resolve under here
+      REPLAY_DIR: /app/data/replay
+      # No runtime switch (ADR-006 E4): change mode by restarting (`make demo-replay`).
+      NEXUS_LLM_MODE: ${NEXUS_LLM_MODE:-live}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}          # required in live mode; startup refuses without it
+      OPENAI_MODEL_EXTRACT: ${OPENAI_MODEL_EXTRACT:-gpt-5.4-mini-2026-03-17}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-45}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
+      EXTRA_CA_FILE: /run/secrets/extra_ca         # empty file = no extra CA
+    secrets: [extra_ca]
+    volumes:
+      - geoint-state:/data
+      - ../../data/scenarios:/app/data/scenarios:ro
+      - ../../data/fixtures/geoint:/app/data/fixtures/geoint:ro      # own fixtures only (§6.3)
+      - ../../data/replay/geoint-agent:/app/data/replay/geoint-agent:ro
+    # nexus-context: orchestrator <-> agent <-> Context Service (internal, no egress).
+    # nexus-egress: OpenAI only. Not on nexus-app, so the frontend cannot reach the agent.
+    networks: [nexus-context, nexus-egress]
+    depends_on:
+      context-service: {condition: service_healthy}
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512m}
+
   frontend:
     build:
       context: ../../apps/frontend
@@ -143,3 +184,4 @@ volumes:
   relate-store: {}
   orchestrator-state: {}
   sigint-state: {}
+  geoint-state: {}

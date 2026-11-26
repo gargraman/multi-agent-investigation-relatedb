@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 COMPOSE=(docker compose -f infrastructure/docker/compose.yaml --env-file .env)
 fail=0
-for svc in context-service sigint-agent orchestrator frontend; do
+for svc in context-service sigint-agent geoint-agent orchestrator frontend; do
   cid=$("${COMPOSE[@]}" ps -q "$svc")
   state=$( [ -n "$cid" ] && docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" || echo missing)
   printf '  %-16s %s\n' "$svc" "$state"
