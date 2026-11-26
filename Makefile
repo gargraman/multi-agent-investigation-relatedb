@@ -10,10 +10,11 @@ COMPOSE = docker compose -f infrastructure/docker/compose.yaml --env-file .env
 
 
 .PHONY: help sync test lint fmt schemas schemas-check \
-        secrets up down ready reset spike-linux up-obs demo demo-replay backup e2e logs smoke-live
+        secrets up down ready reset spike-linux up-obs demo demo-replay backup e2e e2e-replay \
+        logs smoke-live
 
 help: ## List targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
 sync: ## Install all workspace members + dev tools into .venv
 	$(UV) sync --all-packages
@@ -68,6 +69,35 @@ verify-openai: .env ## (S2) List models + strict-schema probe for OPENAI_MODEL_E
 record-replay: .env ## Oracle-gated live recording: make record-replay SCENARIO=contradiction [AGENT=geoint-agent]
 	@test -n "$(SCENARIO)" || { echo "usage: make record-replay SCENARIO=<id>" >&2; exit 2; }
 	@$(WITH_ENV) uv run python scripts/record_replay.py --scenario $(SCENARIO) --agent $(AGENT)
+
+REPLAY_AGENTS = sigint-agent geoint-agent
+E2E_BASE_URL ?= http://127.0.0.1:$(or $(NEXUS_UI_PORT),3000)
+
+# Needs the stack up (`make up`). Restarts only the two agents with NEXUS_LLM_MODE=replay, runs
+# scripts/e2e_replay.py over the 3 scenarios, prints an agent-log check (no OpenAI provider calls,
+# no replay misses), and ALWAYS restores the agents to the default mode afterwards (trap on exit),
+# so `make up` semantics are unchanged. Reads no secrets beyond what compose already uses.
+e2e-replay: .env ## (S3a) agents in replay mode, 3-scenario E2E, agents restored to live after
+	@set -e; \
+	restore() { echo "--- restoring $(REPLAY_AGENTS) to the default NEXUS_LLM_MODE (live)"; \
+	  $(COMPOSE) up -d --no-deps --force-recreate --wait $(REPLAY_AGENTS) >/dev/null 2>&1 \
+	    || echo "WARNING: could not restore live mode; run: make up" >&2; }; \
+	trap restore EXIT; \
+	echo "--- restarting $(REPLAY_AGENTS) with NEXUS_LLM_MODE=replay"; \
+	NEXUS_LLM_MODE=replay $(COMPOSE) up -d --no-deps --force-recreate --wait $(REPLAY_AGENTS); \
+	scripts/check_ready.sh; \
+	since=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+	rc=0; $(UV) run python scripts/e2e_replay.py --base-url $(E2E_BASE_URL) || rc=$$?; \
+	logs=$$($(COMPOSE) logs --no-color --since $$since $(REPLAY_AGENTS) 2>&1); \
+	ready=$$($(COMPOSE) logs --no-color $(REPLAY_AGENTS) 2>&1 | grep 'agent ready' | tail -n 2); \
+	live=$$(printf '%s\n' "$$logs" | grep -c 'llm call done' || true); \
+	miss=$$(printf '%s\n' "$$logs" | grep -c 'replay miss' || true); \
+	done_n=$$(printf '%s\n' "$$logs" | grep -c '"task finished"' || true); \
+	echo "--- agent logs since $$since"; \
+	printf '%s\n' "$$ready" | sed -E 's/.*"service": "([a-z-]+)".*"llm_mode": "([a-z]+)".*/  \1 ready, llm_mode=\2/'; \
+	echo "  task finished: $$done_n   OpenAI calls (llm call done): $$live   replay misses: $$miss"; \
+	if [ "$$live" != 0 ] || [ "$$miss" != 0 ]; then echo "FAIL: model calls or replay misses in replay E2E" >&2; rc=1; fi; \
+	exit $$rc
 
 spike-linux: .env ## ADR-001 R5: Relate spike suite inside the Linux Context Service image
 	scripts/spike_linux.sh
