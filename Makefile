@@ -97,6 +97,7 @@ e2e-replay: .env ## (S3a) agents in replay mode, 3-scenario E2E, agents restored
 	printf '%s\n' "$$ready" | sed -E 's/.*"service": "([a-z-]+)".*"llm_mode": "([a-z]+)".*/  \1 ready, llm_mode=\2/'; \
 	echo "  task finished: $$done_n   OpenAI calls (llm call done): $$live   replay misses: $$miss"; \
 	if [ "$$live" != 0 ] || [ "$$miss" != 0 ]; then echo "FAIL: model calls or replay misses in replay E2E" >&2; rc=1; fi; \
+	if [ "$$done_n" -lt 6 ]; then echo "FAIL: $$done_n task(s) finished in the agent logs, expected >= 6 (2 agents x 3 scenarios)" >&2; rc=1; fi; \
 	exit $$rc
 
 # Real containers, replay mode, compose.chaos.yaml (deadline 45 s, 20 s replay delay). Breaks one

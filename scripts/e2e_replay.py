@@ -7,7 +7,15 @@ terminal status, and check
 - the SIGINT and GEOINT tasks both ``COMPLETED`` with ``llm_mode == "replay"``;
 - each specialist task reports ``usage.replayed`` and has an ``llm.replayed`` timeline event;
 - the committed findings, split by ``source_node_id``, pass the oracle subset check
-  (``check_agent_subset``) for both agents.
+  (``check_agent_subset``) for both agents;
+- no tripwire or canary string of the scenario's oracle appears in any free text the public API
+  exposes: finding text (inside ``check_agent_subset``) and every string in a timeline event
+  payload. The orchestrator does not forward ``TaskResult.summary`` / ``warnings`` (they exist
+  only on the agents' internal task API, which needs a token this script must not read), so the
+  timeline payloads are the closest reachable surface.
+
+A failure is per scenario: an HTTP error, a malformed body or a missing key fails that scenario
+and the remaining ones still run.
 
 Exit 0 when every scenario passes, 1 with the violations listed otherwise. The agents must already
 run with ``NEXUS_LLM_MODE=replay`` (``make e2e-replay`` does that). The frontend API (S1) needs no
@@ -31,7 +39,7 @@ from nexus_contracts.api.context import InvestigationContext
 from nexus_contracts.api.investigations import Investigation
 from nexus_contracts.common import AgentId
 from nexus_contracts.scenario import load_manifest
-from nexus_contracts.scenario.oracle_check import check_agent_subset
+from nexus_contracts.scenario.oracle_check import check_agent_subset, find_forbidden
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS = ["baseline-corroboration", "contradiction", "prompt-injection"]
@@ -39,6 +47,38 @@ SPECIALISTS = (AgentId.SIGINT, AgentId.GEOINT)
 TERMINAL = {"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}
 TIMEOUT_S = 120.0
 POLL_S = 1.0
+TIMELINE_PAGE = 100
+MAX_TIMELINE_PAGES = 50  # a runaway cursor must not hang the script
+
+
+def _strings(value: object) -> list[str]:
+    """Every string leaf of a JSON value."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [t for v in value.values() for t in _strings(v)]
+    if isinstance(value, list):
+        return [t for v in value for t in _strings(v)]
+    return []
+
+
+def read_timeline(client: httpx.Client, inv_id: str) -> list[dict]:
+    """All timeline events, following ``next_cursor`` page by page."""
+    events: list[dict] = []
+    cursor: str | None = None
+    for _ in range(MAX_TIMELINE_PAGES):
+        params: dict[str, str | int] = {"limit": TIMELINE_PAGE}
+        if cursor:
+            params["cursor"] = cursor
+        resp = client.get(f"/api/v1/investigations/{inv_id}/timeline", params=params)
+        if resp.status_code != 200:
+            raise RuntimeError(f"timeline returned {resp.status_code}: {resp.text[:300]}")
+        page = resp.json()
+        events.extend(page["items"])
+        cursor = page.get("next_cursor")
+        if not cursor:
+            return events
+    raise RuntimeError(f"timeline still has a next_cursor after {MAX_TIMELINE_PAGES} pages")
 
 
 def run_scenario(client: httpx.Client, scenario: str, timeout_s: float) -> list[str]:
@@ -52,7 +92,10 @@ def run_scenario(client: httpx.Client, scenario: str, timeout_s: float) -> list[
 
     end = time.monotonic() + timeout_s
     while True:
-        inv = Investigation.model_validate(client.get(f"/api/v1/investigations/{inv_id}").json())
+        resp = client.get(f"/api/v1/investigations/{inv_id}")
+        if not resp.is_success:  # fail fast: a 404/5xx will not turn into a terminal status
+            return [f"{inv_id} poll returned {resp.status_code}: {resp.text[:300]}"]
+        inv = Investigation.model_validate(resp.json())
         if inv.status in TERMINAL:
             break
         if time.monotonic() > end:
@@ -80,19 +123,27 @@ def run_scenario(client: httpx.Client, scenario: str, timeout_s: float) -> list[
             violations.append(f"{agent.value} task usage does not report replayed=true")
 
     # Zero model calls: every specialist task has an ``llm.replayed`` timeline event.
-    resp = client.get(f"/api/v1/investigations/{inv_id}/timeline", params={"limit": 100})
-    if resp.status_code != 200:
-        return [*violations, f"timeline returned {resp.status_code}: {resp.text[:300]}"]
-    replayed = {
-        e["payload"].get("agent_id")
-        for e in resp.json().get("items", [])
-        if e.get("type") == "llm.replayed"
-    }
-    print(f"  {scenario}: llm.replayed events for {sorted(replayed)}", flush=True)
+    events = read_timeline(client, inv_id)
+    replayed = {e["payload"].get("agent_id") for e in events if e.get("type") == "llm.replayed"}
+    print(
+        f"  {scenario}: {len(events)} timeline event(s), llm.replayed for {sorted(replayed)}",
+        flush=True,
+    )
     violations.extend(
         f"no llm.replayed timeline event for {a.value}"
         for a in SPECIALISTS
         if a.value not in replayed
+    )
+    # Tripwires and canaries in any free text on the timeline (see the module docstring).
+    violations.extend(
+        find_forbidden(
+            oracle,
+            [
+                (f"timeline event {e.get('seq', i)} ({e.get('type')})", text)
+                for i, e in enumerate(events)
+                for text in _strings(e.get("payload", {}))
+            ],
+        )
     )
 
     resp = client.get(f"/api/v1/investigations/{inv_id}/findings")
@@ -118,7 +169,8 @@ def main(argv: list[str] | None = None) -> int:
         for scenario in args.scenarios or SCENARIOS:
             try:
                 violations = run_scenario(client, scenario, args.timeout)
-            except (httpx.HTTPError, ValueError) as exc:
+            except (httpx.HTTPError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                # A malformed body or a missing key fails this scenario only; the rest still run.
                 violations = [f"{type(exc).__name__}: {exc}"]
             print(f"{'OK  ' if not violations else 'FAIL'} {scenario}", flush=True)
             for v in violations:
