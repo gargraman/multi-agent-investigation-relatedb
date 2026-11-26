@@ -3,6 +3,10 @@
  * Runs against a REAL stack at BASE_URL (default http://localhost:3000). No route mocking.
  *   NEXUS_E2E_REPLAY=1 BASE_URL=http://localhost:3000 npm run test:e2e -- ac2
  *
+ * Works on any replay-mode stack, plain or chaos: AC2 only requires that the investigation is
+ * created, so the status check accepts every status it can have by the time the page renders
+ * (CREATED/RUNNING, or already terminal on a fast replay stack).
+ *
  * Skipped unless NEXUS_E2E_REPLAY=1: this spec creates an investigation, which on a live-LLM stack
  * means real OpenAI calls. Set the flag only when the stack runs in replay mode. The investigation
  * is cancelled in afterEach so it never keeps dispatching agent work after the test.
@@ -56,7 +60,7 @@ test("AC2: operator creates an investigation from a synthetic scenario", async (
   await expect(page).toHaveURL(new RegExp(`/investigations/${encodeURIComponent(inv.id)}$`));
   await expect(page.getByTestId("investigation-id")).toHaveText(inv.id);
   await expect(page.getByTestId("investigation-scenario")).toHaveText(SCENARIO);
-  await expect(page.getByTestId("investigation-status")).toContainText(/CREATED|RUNNING/);
+  await expect(page.getByTestId("investigation-status")).toContainText(/CREATED|RUNNING|PARTIAL|COMPLETED|FAILED/);
   await expect(banner).toBeVisible();
 
   // At least one timeline event arrives over SSE.

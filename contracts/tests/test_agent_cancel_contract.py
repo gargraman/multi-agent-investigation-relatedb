@@ -9,6 +9,9 @@ with a body that validates as ``TaskCancelResponse`` (the status at the moment o
 ``WORKING``), the task settles ``CANCELED``, a repeated cancel is the idempotent 200 ``CANCELED``,
 and the agent never makes its Context Service commit.
 
+A control test runs the same spec without a cancel and checks the commit IS made, so the
+"no commit" assertion in the cancel test can fail (the batch is real, not ``None``).
+
 The detailed runner behaviour (cancel during commit, supersession, ...) is covered in
 ``shared/tests/agent/test_cancel.py``; this file pins only the contract a caller relies on.
 """
@@ -16,11 +19,13 @@ The detailed runner behaviour (cancel during commit, supersession, ...) is cover
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
+from fastapi import FastAPI
 
 from nexus_contracts.a2a.task import (
     AgentTaskStatus,
@@ -29,6 +34,7 @@ from nexus_contracts.a2a.task import (
     TaskResult,
     TaskUsage,
 )
+from nexus_contracts.api.findings import FindingBatchRequest
 from nexus_contracts.common import AgentId, Classification
 from nexus_contracts.scenario import load_manifest
 from nexus_shared.agent.app import create_agent_app
@@ -44,8 +50,53 @@ ORCH = {"Authorization": f"Bearer {TOKEN}"}
 TASK_ID = "tsk_cancel_contract"
 
 
+def _batch() -> FindingBatchRequest:
+    """A minimal valid findings batch: an un-cancelled run commits it to the Context Service."""
+    return FindingBatchRequest.model_validate(
+        {
+            "task_id": TASK_ID,
+            "investigation_id": "inv_cancel_contract",
+            "attempt": 1,
+            "findings": [
+                {
+                    "kind": "INFERENCE",
+                    "statement": "Repeated contacts observed.",
+                    "confidence": 0.8,
+                    "confidence_band": "HIGH",
+                    "classification": "DEMO-HIGH",
+                    "about": ["handle-a", "handle-b"],
+                    "evidence": [
+                        {
+                            "evidence_id": "ev-1",
+                            "sha256": "a" * 64,
+                            "owner_node_id": "geoint-agent",
+                            "summary": "Contact records.",
+                        }
+                    ],
+                    "assertions": [
+                        {
+                            "type": "LINKED_TO",
+                            "subject": "handle-a",
+                            "object": "handle-b",
+                            "link_type": "CONTACT",
+                            "valid_from": "2026-01-01T00:00:00Z",
+                            "valid_until": "2026-01-02T00:00:00Z",
+                        }
+                    ],
+                    "reasoning_summary": "Several records on distinct days.",
+                    "model_id": "slow-model",
+                    "prompt_version": "slow@1.0.0",
+                    "schema_version": "1",
+                    "valid_from": "2026-01-01T00:00:00Z",
+                    "valid_until": "2026-01-02T00:00:00Z",
+                }
+            ],
+        }
+    )
+
+
 class SlowSpec:
-    """A GEOINT-shaped spec whose pipeline blocks on ``release``, then returns an outcome."""
+    """A GEOINT-shaped spec whose pipeline blocks on ``release``, then returns a real batch."""
 
     agent_id = AgentId.GEOINT
     task_types = ("analyze_synthetic_geospatial",)
@@ -65,24 +116,26 @@ class SlowSpec:
         await self.release.wait()
         return PipelineOutcome(
             status=AgentTaskStatus.COMPLETED,
-            batch=None,
+            batch=_batch(),
             usage=TaskUsage(input_tokens=1, output_tokens=1, llm_calls=1),
             model_id="slow-model",
             prompt_version="slow@1.0.0",
             error=None,
-            summary="never reported",
+            summary="never reported when canceled",
         )
 
 
-class Unreachable:
-    """Context Service stand-in: records every request (the agent must make none)."""
+class RecordingCS:
+    """Context Service stand-in: records every request body and accepts the batch (201)."""
 
     def __init__(self) -> None:
-        self.requests: list[httpx.Request] = []
+        self.requests: list[dict[str, Any]] = []
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        return httpx.Response(500)
+        payload = json.loads(request.content)
+        self.requests.append(payload)
+        ids = [f"fnd_{i}" for i in range(len(payload["findings"]))]
+        return httpx.Response(201, json={"task_id": payload["task_id"], "finding_ids": ids})
 
 
 def _request() -> dict[str, Any]:
@@ -106,9 +159,7 @@ def _request() -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
-async def test_cancel_while_running_answers_200_then_settles_canceled(tmp_path: Path) -> None:
-    spec = SlowSpec()
-    cs = Unreachable()
+def _app(tmp_path: Path, spec: SlowSpec, cs: RecordingCS) -> FastAPI:
     settings = AgentSettings(
         service_name="geoint-agent",
         service_token="s" * 40,
@@ -120,16 +171,38 @@ async def test_cancel_while_running_answers_200_then_settles_canceled(tmp_path: 
         context_service_url="http://cs",
         context_backoff_seconds=0,
     )
-    app = create_agent_app(
+    return create_agent_app(
         spec,
         settings,
         token_registry=TokenRegistry({"orchestrator": TOKEN}),
         context_transport=httpx.MockTransport(cs.handler),
     )
-    async with (
-        app.router.lifespan_context(app),
-        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://agent") as c,
-    ):
+
+
+def _client(app: FastAPI) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://agent")
+
+
+async def test_control_uncancelled_run_commits_its_batch(tmp_path: Path) -> None:
+    """Without a cancel the same run commits: proves the no-commit assertion below can fail."""
+    spec, cs = SlowSpec(), RecordingCS()
+    app = _app(tmp_path, spec, cs)
+    async with app.router.lifespan_context(app), _client(app) as c:
+        assert (await c.post("/v1/tasks", json=_request(), headers=ORCH)).status_code == 202
+        await spec.started.wait()
+        spec.release.set()
+        await app.state.runner.drain()
+        final = TaskResult.model_validate(
+            (await c.get(f"/v1/tasks/{TASK_ID}", headers=ORCH)).json()
+        )
+    assert final.status is AgentTaskStatus.COMPLETED
+    assert [r["task_id"] for r in cs.requests] == [TASK_ID]
+
+
+async def test_cancel_while_running_answers_200_then_settles_canceled(tmp_path: Path) -> None:
+    spec, cs = SlowSpec(), RecordingCS()
+    app = _app(tmp_path, spec, cs)
+    async with app.router.lifespan_context(app), _client(app) as c:
         submit = await c.post("/v1/tasks", json=_request(), headers=ORCH)
         assert submit.status_code == 202
         await spec.started.wait()  # the slow pipeline is running
@@ -142,10 +215,10 @@ async def test_cancel_while_running_answers_200_then_settles_canceled(tmp_path: 
         assert cancel.status_code == 200
         body = TaskCancelResponse.model_validate(cancel.json())
         assert body.task_id == TASK_ID
-        assert body.status is AgentTaskStatus.WORKING  # the cancel is a request: it lands async
+        assert body.status is AgentTaskStatus.WORKING  # status at the time of the request
 
-        # The pipeline finishes only now. The cancel flag is checked before the commit, so the
-        # agent ends CANCELED and never talks to the Context Service.
+        # The pipeline finishes only now, with a real batch in hand. The cancel flag is checked
+        # before the commit, so the agent ends CANCELED and never talks to the Context Service.
         spec.release.set()
         await app.state.runner.drain()
         final = TaskResult.model_validate(

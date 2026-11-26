@@ -10,9 +10,14 @@ terminal status, and check
   (``check_agent_subset``) for both agents;
 - no tripwire or canary string of the scenario's oracle appears in any free text the public API
   exposes: finding text (inside ``check_agent_subset``) and every string in a timeline event
-  payload. The orchestrator does not forward ``TaskResult.summary`` / ``warnings`` (they exist
-  only on the agents' internal task API, which needs a token this script must not read), so the
-  timeline payloads are the closest reachable surface.
+  payload.
+
+Documented deviation: ``TaskResult.summary`` / ``warnings`` are NOT screened here. The orchestrator
+does not forward them, and the agents' internal task API needs a token this script must not read,
+so the timeline payloads are the closest reachable surface. Both agents screen ``summary`` and
+``warnings`` against the scenario tripwires in-process instead
+(``nodes/geoint-node/tests/test_pipeline.py::test_injection_cannot_move_placements_or_reach_stored_summaries``,
+``nodes/sigint-node/tests/test_pipeline.py::test_tripwires_never_reach_task_summary_or_warnings``).
 
 A failure is per scenario: an HTTP error, a malformed body or a missing key fails that scenario
 and the remaining ones still run.

@@ -14,7 +14,7 @@ export type AgentTaskStatus = "SUBMITTED" | "WORKING" | "COMPLETED" | "FAILED" |
 export type TaskId = string;
 
 /**
- * Body of ``POST /v1/tasks/{id}/cancel``: the task's status after the cancel (S3a).
+ * Body of ``POST /v1/tasks/{id}/cancel`` (S3a): status at the time of the cancel request.
  */
 export interface TaskCancelResponse {
   status: AgentTaskStatus;

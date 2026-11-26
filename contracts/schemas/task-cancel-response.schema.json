@@ -15,7 +15,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Body of ``POST /v1/tasks/{id}/cancel``: the task's status after the cancel (S3a).",
+  "description": "Body of ``POST /v1/tasks/{id}/cancel`` (S3a): status at the time of the cancel request.",
   "properties": {
     "status": {
       "$ref": "#/$defs/AgentTaskStatus"

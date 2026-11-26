@@ -8,6 +8,7 @@ import pytest
 from nexus_contracts.a2a.task import AgentTaskStatus
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.common import Classification, ConfidenceBand
+from nexus_contracts.scenario.oracle_check import find_forbidden
 from nexus_shared.llm import (
     LLMUnavailableError,
     RecordingProvider,
@@ -214,6 +215,18 @@ async def test_prompt_injection_cannot_change_graph_facts(baseline_copy: Scenari
     stored = [e.summary for f in out.batch.findings for e in f.evidence]
     assert stored == [e.summary for f in clean.batch.findings for e in f.evidence]
     assert all("IGNORE" not in s and "TRIPWIRE" not in s for s in stored)
+
+
+async def test_tripwires_never_reach_task_summary_or_warnings() -> None:
+    """The E2E cannot read ``TaskResult.summary`` / ``warnings`` (the orchestrator drops them), so
+    they are screened here against the prompt-injection scenario's tripwires, as GEOINT does."""
+    request = make_request("prompt-injection")
+    out = await _run(FakeProvider(valid_output(2)), request=request)
+    assert out.status is AgentTaskStatus.COMPLETED
+    oracle = manifest_for("prompt-injection").oracle
+    assert oracle.forbidden_output_strings
+    task_text = [("summary", out.summary)] + [("warning", w) for w in out.warnings]
+    assert find_forbidden(oracle, task_text) == []
 
 
 async def test_persisted_evidence_summary_is_derived_not_copied() -> None:
