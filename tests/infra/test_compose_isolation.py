@@ -46,19 +46,21 @@ def test_frontend_cannot_reach_context_or_agents(services: dict) -> None:
     assert services["frontend"]["networks"] == ["nexus-app"]
 
 
-def test_agents_mount_only_their_own_fixtures(services: dict) -> None:
-    for name, svc in services.items():
-        if not name.endswith("-agent"):
-            continue
-        kind = name.removesuffix("-agent")
-        fixture_mounts = [s for s in _volume_sources(svc) if "data/fixtures" in s]
-        assert fixture_mounts, f"{name} mounts no fixtures"
-        assert all(s.rstrip("/").endswith(f"data/fixtures/{kind}") for s in fixture_mounts), (
-            name,
-            fixture_mounts,
-        )
-        replay = [s for s in _volume_sources(svc) if "data/replay" in s]
-        assert all(s.rstrip("/").endswith(f"data/replay/{name}") for s in replay), (name, replay)
+def test_agent_volume_sources_are_an_exact_allowlist(services: dict) -> None:
+    """Every ``*-agent`` mounts exactly: its state volume, the scenario manifests, its own
+    fixtures and its own replay recordings. Anything broader (e.g. ``../../data``) fails."""
+    agents = [n for n in services if n.endswith("-agent")]
+    assert agents, "no *-agent services found"
+    for name in agents:
+        short = name.removesuffix("-agent")
+        allowed = {
+            f"{short}-state",
+            "../../data/scenarios",
+            f"../../data/fixtures/{short}",
+            f"../../data/replay/{name}",
+        }
+        sources = [s.rstrip("/") for s in _volume_sources(services[name])]
+        assert sorted(sources) == sorted(allowed), (name, sources)
 
 
 def test_read_only_data_mounts(services: dict) -> None:
@@ -66,27 +68,6 @@ def test_read_only_data_mounts(services: dict) -> None:
         for v in svc.get("volumes", []):
             if isinstance(v, str) and "/data/" in v.split(":", 1)[0] and v.startswith("../"):
                 assert v.endswith(":ro"), (name, v)
-
-
-def _mount_targets(svc: dict) -> list[str]:
-    return [v for v in svc.get("volumes", []) if isinstance(v, str)]
-
-
-def test_geoint_mounts_only_own_fixtures_and_replay(services: dict) -> None:
-    mounts = _mount_targets(services["geoint-agent"])
-    assert any("data/fixtures/geoint:" in m for m in mounts)
-    assert any("data/replay/geoint-agent:" in m for m in mounts)
-    for m in mounts:
-        assert "fixtures/sigint" not in m, m
-        assert "replay/sigint-agent" not in m, m
-        assert "fixtures/analysis" not in m, m
-        assert "replay/analysis-agent" not in m, m
-
-
-def test_sigint_mounts_no_geoint_data(services: dict) -> None:
-    for m in _mount_targets(services["sigint-agent"]):
-        assert "fixtures/geoint" not in m, m
-        assert "replay/geoint-agent" not in m, m
 
 
 def test_geoint_networks_are_context_and_egress(services: dict) -> None:
