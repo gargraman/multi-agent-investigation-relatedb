@@ -76,19 +76,19 @@ _REF_RE = re.compile(
 )
 
 
-def text_violations(field: str, text: str, allowed_refs: frozenset[str]) -> list[str]:
-    """Output-side guard on one model-written text field (S3b). ``field`` is the message prefix
+def text_violations(where: str, text: str, allowed_refs: frozenset[str]) -> list[str]:
+    """Output-side guard on one model-written text field (S3b). ``where`` is the message prefix
     (e.g. ``C1.statement``). Returns at most one message per rule; messages never echo the
     offending text, because the repair prompt would re-inject it."""
     errors: list[str] = []
     if _FENCE_RE.search(text):
-        errors.append(f"{field} contains fence markers")
+        errors.append(f"{where} contains fence markers")
     if _URL_RE.search(text):
-        errors.append(f"{field} contains a URL")
+        errors.append(f"{where} contains a URL")
     if _TOKEN_RE.search(text):
-        errors.append(f"{field} contains a reserved token")
+        errors.append(f"{where} contains a reserved token")
     if any(m.group(0) not in allowed_refs for m in _REF_RE.finditer(text)):
-        errors.append(f"{field} references an id outside its candidate")
+        errors.append(f"{where} references an id outside its candidate")
     return errors
 
 

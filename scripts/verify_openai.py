@@ -74,6 +74,16 @@ PROBE_INPUT = {
 }
 
 
+def probe_violations(output: SigintLlmOutput) -> list[str]:
+    """Post-parse rules on the probe output. The output guard's allowed refs come from the probe
+    candidate itself: its handles (``about``) and its evidence ids."""
+    cand = PROBE_INPUT["candidates"][0]
+    refs = frozenset({cand["handle_a"], cand["handle_b"]}) | frozenset(
+        e["evidence_id"] for e in cand["evidence"]
+    )
+    return check_output(output, [cand["candidate_id"]], {cand["candidate_id"]: refs})
+
+
 def _read_key_from_env_file(path: Path) -> str | None:
     if not path.is_file():
         return None
@@ -155,7 +165,7 @@ async def main() -> int:
         await provider.aclose()
 
     assert isinstance(result.output, SigintLlmOutput)
-    violations = check_output(result.output, ["C1"])
+    violations = probe_violations(result.output)
     u = result.usage
     print("strict json_schema accepted: yes")
     print(f"served model: {result.model_id}")
