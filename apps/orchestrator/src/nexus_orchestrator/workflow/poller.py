@@ -68,6 +68,17 @@ def skipped_agents(manifest: ScenarioManifest | None, tasks: list[TaskRecord]) -
     return [t.agent for t in manifest.template.tasks if t.agent not in have]
 
 
+def outcomes_in_template_order(
+    manifest: ScenarioManifest | None, tasks: list[TaskRecord]
+) -> list[terminal.TaskOutcome]:
+    """Task outcomes ordered by their agent's manifest-template index (FR-124); a task whose
+    agent is not in the template goes last. ``retry_open`` is wired in by the retry task (S3b-7)."""
+    order = [t.agent for t in manifest.template.tasks] if manifest is not None else []
+    rank = {agent: i for i, agent in enumerate(order)}
+    ordered = sorted(tasks, key=lambda t: rank.get(t.agent_id, len(order)))  # stable
+    return [terminal.TaskOutcome(t.agent_id, t.status, t.status_reason, False) for t in ordered]
+
+
 class Poller:
     def __init__(
         self,
@@ -236,9 +247,8 @@ class Poller:
     async def _maybe_finish(self, investigation_id: str, manifest: ScenarioManifest | None) -> bool:
         """Apply the terminal rule if every task is terminal. True when the driver can exit."""
         tasks = await self.repo.task_records(investigation_id)
-        outcomes = [terminal.TaskOutcome(t.agent_id, t.status) for t in tasks]
         skipped = skipped_agents(manifest, tasks)
-        if terminal.decide(outcomes, skipped) is None:
+        if terminal.decide(outcomes_in_template_order(manifest, tasks), skipped) is None:
             return False
         async with self.db.transaction() as tx:
             inv = await self.repo.tx_investigation_record(tx, investigation_id)
@@ -246,8 +256,7 @@ class Poller:
                 return True
             fresh = await self.repo.tx_task_records(tx, investigation_id)
             decision = terminal.decide(
-                [terminal.TaskOutcome(t.agent_id, t.status) for t in fresh],
-                skipped_agents(manifest, fresh),
+                outcomes_in_template_order(manifest, fresh), skipped_agents(manifest, fresh)
             )
             if decision is None:
                 return False

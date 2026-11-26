@@ -176,13 +176,13 @@ async def test_task_request_fields_trace_context_and_token(make_app, exporter) -
 # -- failure outcomes -------------------------------------------------------------------------
 
 
-async def test_agent_failed_ends_failed_analysis_policy_unmet(make_app) -> None:
+async def test_agent_failed_ends_failed_with_the_tasks_reason(make_app) -> None:
     agent = FakeAgent(script=[S.WORKING, S.FAILED])
     app = make_app(FakeContextService(), agent)
     async with running(app) as client:
         inv = await create(client)
         done = await until_status(client, inv.id, TERMINAL)
-    assert done.status == "FAILED" and done.status_reason == "analysis_policy_unmet"
+    assert done.status == "FAILED" and done.status_reason == "llm_unavailable"
     [task] = done.tasks
     assert task.status == "FAILED"
     assert task.error_code == "llm_unavailable" and task.error_category == "llm"
@@ -197,7 +197,7 @@ async def test_rejected_on_submit_fails_task_with_task_rejected(make_app) -> Non
         inv = await create(client)
         done = await until_status(client, inv.id, TERMINAL)
         events = await timeline(client, inv.id)
-    assert done.status == "FAILED" and done.status_reason == "analysis_policy_unmet"
+    assert done.status == "FAILED" and done.status_reason == "task_rejected"
     assert done.tasks[0].status == "FAILED"
     assert done.tasks[0].error_code == "task_rejected"
     assert task_states(events)[-1] == ("PENDING", "FAILED")

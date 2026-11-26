@@ -111,8 +111,10 @@ def test_terminal_states_are_sticky() -> None:
 SIG, GEO, ANA = AgentId.SIGINT, AgentId.GEOINT, AgentId.ANALYSIS
 
 
-def o(agent: AgentId, state: T) -> terminal.TaskOutcome:
-    return terminal.TaskOutcome(agent, state)
+def o(
+    agent: AgentId, state: T, reason: str | None = None, retry_open: bool = False
+) -> terminal.TaskOutcome:
+    return terminal.TaskOutcome(agent, state, reason, retry_open)
 
 
 @pytest.mark.parametrize(
@@ -127,12 +129,18 @@ def o(agent: AgentId, state: T) -> terminal.TaskOutcome:
         # row 2: no specialist COMPLETED
         ([o(SIG, T.FAILED)], [GEO, ANA], (I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)),
         ([o(SIG, T.CANCELLED)], [GEO, ANA], (I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)),
-        ([o(SIG, T.TIMED_OUT)], [GEO, ANA], (I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)),
+        # FR-124 fallback: a TIMED_OUT task without a reason is deadline_exceeded
+        ([o(SIG, T.TIMED_OUT)], [GEO, ANA], (I.FAILED, ErrorCode.DEADLINE_EXCEEDED)),
         # row 3: the S2 demo path
         ([o(SIG, T.COMPLETED)], [GEO, ANA], (I.PARTIAL, ErrorCode.AGENT_NOT_ENABLED)),
-        ([o(SIG, T.FAILED), o(GEO, T.COMPLETED)], [ANA], (I.PARTIAL, ErrorCode.AGENT_NOT_ENABLED)),
-        # row 4: nothing skipped
-        ([o(SIG, T.COMPLETED)], [], (I.PARTIAL, ErrorCode.ANALYSIS_POLICY_UNMET)),
+        # FR-124: some completed, reason is the first non-COMPLETED task's (here: the fallback)
+        (
+            [o(SIG, T.FAILED), o(GEO, T.COMPLETED)],
+            [ANA],
+            (I.PARTIAL, ErrorCode.ANALYSIS_POLICY_UNMET),
+        ),
+        # FR-124: all specialists completed is PARTIAL(agent_not_enabled) whether or not skipped
+        ([o(SIG, T.COMPLETED)], [], (I.PARTIAL, ErrorCode.AGENT_NOT_ENABLED)),
         # an analysis task COMPLETED does not count as a specialist
         ([o(ANA, T.COMPLETED)], [SIG], (I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)),
     ],
@@ -145,6 +153,47 @@ def test_terminal_decide(tasks, skipped, expected) -> None:
         assert decision == terminal.TerminalDecision(*expected)
         # every outcome is a legal edge out of RUNNING
         assert investigation_allowed(I.RUNNING, decision.status)
+
+
+def test_all_completed_partial_agent_not_enabled() -> None:
+    decision = terminal.decide([o(SIG, T.COMPLETED), o(GEO, T.COMPLETED)], [ANA])
+    assert decision == terminal.TerminalDecision(I.PARTIAL, ErrorCode.AGENT_NOT_ENABLED)
+
+
+def test_mixed_uses_first_failing_reason_in_template_order() -> None:
+    sig = o(SIG, T.FAILED, ErrorCode.TASK_LOST.value)
+    geo = o(GEO, T.TIMED_OUT, ErrorCode.DEADLINE_EXCEEDED.value)
+    assert terminal.decide([sig, geo], []) == terminal.TerminalDecision(
+        I.FAILED, ErrorCode.TASK_LOST
+    )
+    assert terminal.decide([geo, sig], []) == terminal.TerminalDecision(
+        I.FAILED, ErrorCode.DEADLINE_EXCEEDED
+    )
+
+
+def test_one_completed_one_timed_out_partial_deadline_exceeded() -> None:
+    tasks = [o(SIG, T.COMPLETED), o(GEO, T.TIMED_OUT, ErrorCode.DEADLINE_EXCEEDED.value)]
+    assert terminal.decide(tasks, [ANA]) == terminal.TerminalDecision(
+        I.PARTIAL, ErrorCode.DEADLINE_EXCEEDED
+    )
+
+
+def test_retry_open_blocks_decision() -> None:
+    tasks = [o(SIG, T.FAILED, ErrorCode.LLM_UNAVAILABLE.value, retry_open=True)]
+    assert terminal.decide(tasks, [GEO, ANA]) is None
+    tasks = [o(SIG, T.COMPLETED), o(GEO, T.FAILED, ErrorCode.LLM_UNAVAILABLE.value, True)]
+    assert terminal.decide(tasks, [ANA]) is None
+
+
+def test_no_tasks_failed_agent_not_enabled() -> None:
+    assert terminal.decide([], [SIG, GEO, ANA]) == terminal.TerminalDecision(
+        I.FAILED, ErrorCode.AGENT_NOT_ENABLED
+    )
+
+
+def test_unknown_reason_string_falls_back() -> None:
+    decision = terminal.decide([o(SIG, T.FAILED, "not-a-code")], [])
+    assert decision == terminal.TerminalDecision(I.FAILED, ErrorCode.ANALYSIS_POLICY_UNMET)
 
 
 # -- settings ---------------------------------------------------------------------------------
