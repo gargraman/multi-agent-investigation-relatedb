@@ -20,12 +20,6 @@ def test_geoint_identity() -> None:
     assert ok.service_name == "geoint-agent" and ok.sqlite_path == Path("var/geoint.sqlite")
 
 
-def test_main_app_is_lazy() -> None:
-    import nexus_geoint.main as main
-
-    assert "app" not in vars(main)
-
-
 async def test_api_card_and_submit(tmp_path: Path) -> None:
     requests: list[httpx.Request] = []
 

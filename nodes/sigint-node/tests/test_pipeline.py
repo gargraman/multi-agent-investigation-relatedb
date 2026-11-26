@@ -16,7 +16,7 @@ from nexus_shared.llm import (
     TokenBudget,
 )
 from nexus_sigint import pipeline
-from nexus_sigint.pipeline import band_for, run
+from nexus_sigint.pipeline import run
 from nexus_sigint.prompts import load_prompt
 
 from .conftest import FIXTURES, FakeProvider, ScenarioCopy, make_request, manifest_for, valid_output
@@ -54,14 +54,6 @@ async def test_happy_path_builds_one_batch_from_detector_facts() -> None:
     assert f2.classification is Classification.DEMO_LOW
     # summary is deterministic counts, no LLM text
     assert "Repeated contacts" not in out.summary
-
-
-@pytest.mark.parametrize(
-    ("conf", "band"),
-    [(0.0, "LOW"), (0.3999, "LOW"), (0.40, "MODERATE"), (0.7499, "MODERATE"), (0.75, "HIGH")],
-)
-def test_band_thresholds(conf: float, band: str) -> None:
-    assert band_for(conf).value == band
 
 
 async def test_input_aliases_and_fences() -> None:

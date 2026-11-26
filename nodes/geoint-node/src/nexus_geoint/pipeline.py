@@ -31,13 +31,14 @@ from nexus_contracts.api.findings import (
     FindingDraft,
     PlacedAtAssertion,
 )
-from nexus_contracts.common import AgentId, Classification, ConfidenceBand, FindingKind
+from nexus_contracts.common import AgentId, Classification, FindingKind
 from nexus_contracts.scenario.fixtures import SightingLog
 from nexus_contracts.scenario.loader import EvidenceIntegrityError, load_evidence
 from nexus_contracts.scenario.manifest import ScenarioManifest
 from nexus_geoint.detectors import PlacementCandidate, placement_candidates, resolve_sightings
 from nexus_geoint.prompts import load_prompt
 from nexus_geoint.schemas import SCHEMA_VERSION, GeointLlmOutput, check_output
+from nexus_shared.agent.bands import band_for
 from nexus_shared.agent.llm_steps import classify_with_repair, fence
 from nexus_shared.agent.prompts import Prompt
 from nexus_shared.agent.spec import PipelineOutcome
@@ -51,30 +52,17 @@ TASK_TYPES: tuple[str, ...] = ("analyze_synthetic_geospatial",)
 SUPPORTED_CONTRACT_MAJOR = "1"
 LLM_TASK = "geoint-classify"
 
-BAND_MODERATE = 0.40
-BAND_HIGH = 0.75
-"""G7 (confirmed): LOW < 0.40 ≤ MODERATE < 0.75 ≤ HIGH."""
-
 
 __all__ = [
     "AGENT_ID",
     "LLM_TASK",
     "TASK_TYPES",
     "PipelineOutcome",
-    "band_for",
     "build_llm_input",
     "run",
     "stored_summary",
     "validate_request",
 ]
-
-
-def band_for(confidence: float) -> ConfidenceBand:
-    if confidence < BAND_MODERATE:
-        return ConfidenceBand.LOW
-    if confidence < BAND_HIGH:
-        return ConfidenceBand.MODERATE
-    return ConfidenceBand.HIGH
 
 
 def validate_request(request: TaskRequest, manifest: ScenarioManifest | None) -> ErrorCode | None:

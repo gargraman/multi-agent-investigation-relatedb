@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -40,11 +41,14 @@ from nexus_shared.llm import LLMProvider, TokenBudget
 log = logging.getLogger(__name__)
 
 
+Phase = Literal["pending", "run", "commit"]  # "run": in spec.run; "commit": in submit_batch
+
+
 @dataclass
 class _Run:
     """In-memory state of one running attempt."""
 
-    phase: str = "pending"  # "pending" -> "run" (in spec.run) -> "commit" (in submit_batch)
+    phase: Phase = "pending"
     cancel_requested: bool = False  # set by TaskRunner.cancel; checked at the cancel points
     interrupted: bool = False  # TaskRunner.cancel cancelled the asyncio task (phase "run")
     task: asyncio.Task[None] | None = None
@@ -130,18 +134,19 @@ class TaskRunner:
             span.set_attribute("nexus.task_id", request.task_id)
             span.set_attribute("nexus.attempt", request.attempt)
             try:
-                await self._execute(request, run)
-            except asyncio.CancelledError:
-                if not run.interrupted or self._stopping:
-                    raise  # shutdown: the row stays WORKING for the next boot sweep
-                current = asyncio.current_task()
-                if current is not None:
-                    current.uncancel()
-                log.info("task canceled in flight", extra=_ids(request))
-                await self._cancel_current(request)
-            except Exception:
+                try:
+                    await self._execute(request, run)
+                except asyncio.CancelledError:
+                    if not run.interrupted or self._stopping:
+                        raise  # shutdown: the row stays WORKING for the next boot sweep
+                    current = asyncio.current_task()
+                    if current is not None:
+                        current.uncancel()
+                    log.info("task canceled in flight", extra=_ids(request))
+                    await self._finish_latest(request, AgentTaskStatus.CANCELED)
+            except Exception:  # also covers a failed CANCELED write: one crash handler
                 log.exception("task crashed", extra=_ids(request))
-                await self._fail_latest(request, ErrorCode.INTERNAL_ERROR)
+                await self._finish_latest(request, AgentTaskStatus.FAILED, ErrorCode.INTERNAL_ERROR)
 
     async def _cancel_point(self, row: TaskRow, run: _Run) -> bool:
         """True if a cancel was requested for this attempt (in memory or in the store)."""
@@ -293,15 +298,14 @@ class TaskRunner:
             },
         )
 
-    async def _cancel_current(self, request: TaskRequest) -> None:
+    async def _finish_latest(
+        self, request: TaskRequest, status: AgentTaskStatus, code: ErrorCode | None = None
+    ) -> None:
+        """End this attempt ``status`` (CANCELED or FAILED) unless it is already terminal."""
         row = await self.store.get(request.task_id, request.attempt)
         if row is not None and not row.status.is_terminal:
-            await self._finish(row, AgentTaskStatus.CANCELED, summary=CANCELED_SUMMARY)
-
-    async def _fail_latest(self, request: TaskRequest, code: ErrorCode) -> None:
-        row = await self.store.get(request.task_id, request.attempt)
-        if row is not None and not row.status.is_terminal:
-            await self._finish(row, AgentTaskStatus.FAILED, error=code, summary="Task failed.")
+            summary = CANCELED_SUMMARY if status is AgentTaskStatus.CANCELED else "Task failed."
+            await self._finish(row, status, error=code, summary=summary)
 
 
 def _ids(request: TaskRequest) -> dict[str, object]:

@@ -223,3 +223,43 @@ async def test_shutdown_leaves_row_working_for_boot_sweep(tmp_path: Path) -> Non
         await app.state.runner.stop()
         row = await app.state.store.get("tsk_1", 1)
     assert row.status is AgentTaskStatus.WORKING
+
+
+async def test_cancel_submitted_task_endpoint(tmp_path: Path) -> None:
+    """Characterization: a cancel that lands before the runner's first step ends CANCELED without
+    ever running the pipeline, and the terminal status is stable on later reads."""
+    spec = _spec()
+    cs = RecordingCS()
+    app = _app(spec, tmp_path, cs)
+    async with client(app) as c:
+        assert (await c.post("/v1/tasks", json=req(), headers=ORCH)).status_code == 202
+        r = await c.post("/v1/tasks/tsk_1/cancel", headers=ORCH)  # no await point since the submit
+        assert r.status_code == 200 and r.json()["task_id"] == "tsk_1"
+        await drain(app)
+        first = (await c.get("/v1/tasks/tsk_1", headers=ORCH)).json()
+        again = (await c.get("/v1/tasks/tsk_1", headers=ORCH)).json()
+    assert first["status"] == again["status"] == "CANCELED", first
+    assert first["error"] is None and first["completed_at"] is not None
+    assert spec.runs == [] and cs.requests == []
+
+
+async def test_rejected_attempt2_supersedes_running_attempt1(tmp_path: Path) -> None:
+    """S3a T4 ruling, relied on by the orchestrator's re-dispatch: a higher attempt that
+    ``validate_request`` rejects still supersedes the running lower one, and GET reports it."""
+    spec = _spec({1: asyncio.Event()})  # attempt 1 blocks forever
+    cs = RecordingCS()
+    app = _app(spec, tmp_path, cs)
+    async with client(app) as c:
+        assert (await c.post("/v1/tasks", json=req(), headers=ORCH)).status_code == 202
+        await spec.started[1].wait()
+        second = await c.post(
+            "/v1/tasks", json=req(attempt=2, task_type="analyze_other"), headers=ORCH
+        )
+        assert second.status_code == 202 and second.json()["status"] == "REJECTED"
+        await drain(app)  # attempt 1 was interrupted, so this returns
+        latest = (await c.get("/v1/tasks/tsk_1", headers=ORCH)).json()
+        lower = await app.state.store.get("tsk_1", 1)
+    assert lower.status is AgentTaskStatus.CANCELED
+    assert latest["attempt"] == 2 and latest["status"] == "REJECTED", latest
+    assert [r.attempt for r in spec.runs] == [1]  # attempt 2 never ran
+    assert cs.requests == []  # no batch committed
