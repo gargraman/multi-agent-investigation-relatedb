@@ -187,14 +187,10 @@ async def test_timeout_loses_race_to_completion(make_app) -> None:
 async def test_cancel_failure_does_not_undo_the_timeout(make_app) -> None:
     clock = FakeClock(utcnow())
     agent = FakeAgent(script=[S.WORKING])
-    # The investigation deadline equals the task deadline, so the retry window (FR-121) is closed
-    # at once and the investigation ends on the same tick as the timeout.
-    app = make_app(
-        FakeContextService(),
-        agent,
-        clock=clock,
-        investigation_deadline_seconds=TASK_DEADLINE_SECONDS,
-    )
+    agent.ready = False  # no re-dispatch (S3b-7): the retry window stays open to the deadline
+    # The task times out at 180 s; the investigation deadline (200 s) closes the window and ends
+    # the investigation through the fence (FR-123).
+    app = make_app(FakeContextService(), agent, clock=clock, investigation_deadline_seconds=200)
     async with running(app) as client:
         inv_id = await create(client)
         await wait_until(task_in(app, inv_id, T.RUNNING))
@@ -206,7 +202,9 @@ async def test_cancel_failure_does_not_undo_the_timeout(make_app) -> None:
         runtime(app).poller.agents.cancel = boom  # type: ignore[method-assign]
         clock.advance(TASK_DEADLINE_SECONDS)
         await wait_until(task_in(app, inv_id, T.TIMED_OUT))
-        await wait_until(_driver_done(app, inv_id))  # the tick went on to finish the investigation
+        await parked(clock)  # the tick survived the failed cancel and went back to sleep
+        clock.advance(200 - TASK_DEADLINE_SECONDS)
+        await wait_until(_driver_done(app, inv_id))
         status = (await client.get(f"/api/v1/investigations/{inv_id}")).json()["status"]
         task = await the_task(app, inv_id)
     assert task.status is T.TIMED_OUT and status == "FAILED"

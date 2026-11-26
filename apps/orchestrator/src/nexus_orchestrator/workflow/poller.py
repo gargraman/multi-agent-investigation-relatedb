@@ -5,6 +5,9 @@ rows, so a restart (resume sweep) just starts a new driver.
 
 Each tick, only while this process **holds the leader lock** (ADR-005 D1):
 
+0. Investigation deadline (FR-123, ``fence.py``): at ``investigations.deadline`` the fence ends it
+   (PARTIAL if a specialist COMPLETED, else FAILED, both ``investigation_deadline``), cancelling
+   every open task, and the driver exits. Nothing below runs on that tick.
 1. Time out every PENDING/DISPATCHED/RUNNING task past its deadline (FR-120, ``deadlines.py``):
    → TIMED_OUT (version guarded), then a best-effort agent cancel for DISPATCHED/RUNNING ones.
 2. On the driver's first leader tick, dispatch every PENDING task (same ``attempt``; the agent's
@@ -64,6 +67,7 @@ from nexus_orchestrator.state.repository import (
 )
 from nexus_orchestrator.workflow import deadlines, terminal
 from nexus_orchestrator.workflow.dispatch import Dispatcher, stored_carrier
+from nexus_orchestrator.workflow.fence import Fence
 from nexus_orchestrator.workflow.transitions import FIRST_ATTEMPT
 
 log = logging.getLogger(__name__)
@@ -112,6 +116,7 @@ class Poller:
         catalog: ScenarioCatalog,
         agents: AgentClient,
         dispatcher: Dispatcher,
+        fence: Fence,
         tracer: Tracer,
         is_leader: Callable[[], bool],
         clock: Clock | None = None,
@@ -123,6 +128,7 @@ class Poller:
         self.catalog = catalog
         self.agents = agents
         self.dispatcher = dispatcher
+        self.fence = fence
         self.tracer = tracer
         self.is_leader = is_leader
         self._drivers: dict[str, asyncio.Task[None]] = {}
@@ -181,8 +187,11 @@ class Poller:
                                 extra={"investigation_id": investigation_id},
                             )
                     tasks = await self.repo.task_records(investigation_id)
-                    # Tick order: (1) investigation deadline [S3b-8], (2) task deadlines,
+                    # Tick order: (1) investigation deadline (FR-123), (2) task deadlines,
                     # (3) re-dispatch (FR-121), then dispatch, poll, finish.
+                    if self.clock.now() >= inv.deadline:
+                        await self._deadline(inv, tasks)
+                        return  # ended, or someone else already ended it: either way we are done
                     due = deadlines.expired(tasks, self.clock.now())
                     if due:
                         await asyncio.gather(*(self._time_out(t) for t in due))
@@ -217,6 +226,35 @@ class Poller:
             except Exception:
                 log.exception("driver tick failed", extra={"investigation_id": investigation_id})
             await self.clock.sleep(self._sleep_seconds())
+
+    async def _deadline(self, inv: InvestigationRecord, tasks: list[TaskRecord]) -> None:
+        """FR-123: the investigation is out of time. PARTIAL if a specialist COMPLETED, else
+        FAILED; the fence cancels the open tasks (and closes the Context Service first)."""
+        completed = any(
+            t.agent_id in terminal.SPECIALISTS and t.status is OrchestratorTaskState.COMPLETED
+            for t in tasks
+        )
+        status = InvestigationStatus.PARTIAL if completed else InvestigationStatus.FAILED
+        reason = ErrorCode.INVESTIGATION_DEADLINE.value
+        attrs = {
+            "nexus.investigation.id": inv.id,
+            "nexus.investigation.status": status.value,
+            "nexus.investigation.reason": reason,
+        }
+        parent = propagate.extract(stored_carrier(inv.trace_context_json))
+        with self.tracer.start_as_current_span(
+            "workflow.deadline", context=parent, attributes=attrs
+        ):
+            result = await self.fence.end(inv.id, status, reason, task_reason=reason)
+        log.info(
+            "investigation deadline",
+            extra={
+                "investigation_id": inv.id,
+                "status": result.status.value,
+                "applied": result.applied,
+                "context_closed": result.context_closed,
+            },
+        )
 
     async def _poll_one(self, task: TaskRecord, trace_context_json: str | None) -> None:
         self.polls += 1

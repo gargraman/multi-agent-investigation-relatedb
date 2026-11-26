@@ -113,12 +113,21 @@ class FakeClock:
 
 
 class FakeContextService:
-    """HTTP test double for the Context Service (spec §12.3 ``POST /v1/investigations``)."""
+    """HTTP test double for the Context Service (spec §12.3 ``POST /v1/investigations``).
+
+    ``POST /v1/investigations/{id}/close`` records ``(id, status)`` in ``closes`` and answers 200;
+    ``close_hangs = True`` makes it never answer (a Context Service that is up but stuck).
+    ``journal``, when set, gets ``"close"`` appended per close call, so a test can check the
+    order against the agents' cancels (give both doubles the same list).
+    """
 
     def __init__(self, up: bool = True) -> None:
         self.up = up
         self.requests: list[httpx.Request] = []
         self.registered: dict[str, dict] = {}
+        self.closes: list[tuple[str, str]] = []
+        self.close_hangs = False
+        self.journal: list[str] | None = None
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if not self.up:
@@ -139,6 +148,16 @@ class FakeContextService:
                     "evidence_count": len(body["evidence"]),
                 },
             )
+        if request.method == "POST" and request.url.path.endswith("/close"):
+            inv_id = request.url.path.split("/")[3]
+            status = json.loads(request.content)["status"]
+            self.closes.append((inv_id, status))
+            if self.journal is not None:
+                self.journal.append("close")
+            closed_at = utcnow().isoformat()
+            return httpx.Response(
+                200, json={"investigation_id": inv_id, "status": status, "closed_at": closed_at}
+            )
         if request.method == "GET" and request.url.path.endswith("/context"):
             inv_id = request.url.path.split("/")[3]
             if self.context_status != 200:
@@ -152,9 +171,14 @@ class FakeContextService:
 
     context_status = 200  # force a non-200 answer on GET /v1/investigations/{id}/context
 
+    async def _serve(self, request: httpx.Request) -> httpx.Response:
+        if self.close_hangs and request.url.path.endswith("/close"):
+            await asyncio.Event().wait()  # until the caller's timeout cancels us
+        return self.handler(request)
+
     @property
     def transport(self) -> httpx.MockTransport:
-        return httpx.MockTransport(self.handler)
+        return httpx.MockTransport(self._serve)
 
     def creates(self) -> list[httpx.Request]:
         return [r for r in self.requests if r.url.path == "/v1/investigations"]
@@ -172,6 +196,8 @@ class FakeAgent:
       404 for unknown ids (``forget()`` simulates an agent that lost its state).
     - ``POST /v1/tasks/{id}/cancel``: records the id in ``cancels``; the scripted status is left
       alone (the orchestrator has already moved on, which is what the tests look at).
+      ``hang_cancel = True`` makes it never answer. ``journal``, when set, gets
+      ``"cancel:<task_id>"`` appended per call (share one list with ``FakeContextService``).
     - ``GET /readyz``: 200, or 503 while ``ready = False`` (the re-dispatch gate, FR-121).
     - ``reply_attempt`` makes poll results claim another attempt (a late reply from attempt 1).
     - ``up = False`` makes every request a connect error; ``lose_response = True`` lets the
@@ -204,6 +230,8 @@ class FakeAgent:
         self.submits: list[tuple[int, TaskRequest, httpx.Headers]] = []
         self.polls: list[str] = []
         self.cancels: list[str] = []  # task ids of every ``POST /v1/tasks/{id}/cancel``
+        self.hang_cancel = False
+        self.journal: list[str] | None = None
         self.card_reads = 0
         self.app = self._build()
 
@@ -326,6 +354,10 @@ class FakeAgent:
             if request.headers.get("authorization") != f"Bearer {TOKEN}":
                 return JSONResponse({"title": "Unauthorized", "status": 401}, status_code=401)
             fake.cancels.append(task_id)
+            if fake.journal is not None:
+                fake.journal.append(f"cancel:{task_id}")
+            if fake.hang_cancel:
+                await asyncio.Event().wait()  # until the caller's timeout cancels us
             if task_id not in fake.tasks:
                 return JSONResponse({"title": "Not Found", "status": 404}, status_code=404)
             return JSONResponse({"task_id": task_id, "status": S.CANCELED.value})
@@ -348,6 +380,20 @@ class _Switchable(httpx.AsyncBaseTransport):
             await response.aread()
             raise httpx.ReadError("response lost (test double)", request=request)
         return response
+
+
+class Router(httpx.AsyncBaseTransport):
+    """Routes by host to each agent's transport and logs ``(host, method, path)`` in order."""
+
+    def __init__(self, agents: dict[str, FakeAgent]) -> None:
+        self.agents = agents
+        self.transports = {host: a.transport for host, a in agents.items()}
+        self.log: list[tuple[str, str, str]] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        self.log.append((host, request.method, request.url.path))
+        return await self.transports[host].handle_async_request(request)
 
 
 async def wait_until(

@@ -23,6 +23,7 @@ from orch_testkit import (
     SCENARIOS_DIR,
     FakeAgent,
     FakeContextService,
+    Router,
     S,
     running,
     wait_until,
@@ -50,20 +51,6 @@ FIXTURES_DIR = SCENARIOS_DIR.parent / "fixtures"
 
 
 # -- AC3-b: one investigation, both specialists, one trace -------------------------------------
-
-
-class Router(httpx.AsyncBaseTransport):
-    """Routes by host to each agent's transport and logs ``(agent, method, path)`` in order."""
-
-    def __init__(self, agents: dict[str, FakeAgent]) -> None:
-        self.agents = agents
-        self.transports = {host: a.transport for host, a in agents.items()}
-        self.log: list[tuple[str, str, str]] = []
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        host = request.url.host
-        self.log.append((host, request.method, request.url.path))
-        return await self.transports[host].handle_async_request(request)
 
 
 def _trace_id(traceparent: str) -> str:

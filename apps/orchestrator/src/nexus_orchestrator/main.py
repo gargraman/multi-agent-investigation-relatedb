@@ -40,6 +40,7 @@ from nexus_orchestrator.state.leader import LeaderLock, LeaderTimings
 from nexus_orchestrator.state.repository import Repository
 from nexus_orchestrator.workflow.creation import InvestigationWorkflow
 from nexus_orchestrator.workflow.dispatch import Dispatcher
+from nexus_orchestrator.workflow.fence import Fence
 from nexus_orchestrator.workflow.poller import Poller
 from nexus_shared.telemetry import instrument_app, setup_telemetry
 
@@ -102,12 +103,26 @@ def create_app(
         return leader.held
 
     dispatcher = Dispatcher(settings, db, repo, agents, tracer, is_leader, clock)
-    poller = Poller(settings, db, repo, catalog, agents, dispatcher, tracer, is_leader, clock)
+    fence = Fence(settings, db, repo, context, agents, tracer, clock)
+    poller = Poller(
+        settings, db, repo, catalog, agents, dispatcher, fence, tracer, is_leader, clock
+    )
     workflow = InvestigationWorkflow(
         settings, db, repo, catalog, context, tracer, poller, registry, clock
     )
     runtime = Runtime(
-        settings, db, broker, repo, catalog, context, leader, workflow, agents, registry, poller
+        settings,
+        db,
+        broker,
+        repo,
+        catalog,
+        context,
+        leader,
+        workflow,
+        agents,
+        registry,
+        poller,
+        fence,
     )
 
     @asynccontextmanager

@@ -310,7 +310,8 @@ async def test_window_capped_by_investigation_deadline(make_app) -> None:
         await wait_until(driver_done(app, inv_id))
         end = await detail(client, inv_id)
 
-    assert end["status"] == "FAILED" and end["status_reason"] == "deadline_exceeded"
+    # S3b-8: at the investigation deadline the fence ends it (FR-123), not the terminal rule.
+    assert end["status"] == "FAILED" and end["status_reason"] == "investigation_deadline"
     assert len(agent.submits) == 1
 
 

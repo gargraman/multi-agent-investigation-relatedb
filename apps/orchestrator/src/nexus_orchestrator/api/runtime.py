@@ -16,6 +16,7 @@ from nexus_orchestrator.state.db import Database
 from nexus_orchestrator.state.leader import LeaderLock
 from nexus_orchestrator.state.repository import Repository
 from nexus_orchestrator.workflow.creation import InvestigationWorkflow
+from nexus_orchestrator.workflow.fence import Fence
 from nexus_orchestrator.workflow.poller import Poller
 
 
@@ -32,6 +33,7 @@ class Runtime:
     agents: AgentClient
     registry: AgentRegistry
     poller: Poller
+    fence: Fence
     sweep_done: bool = False
     shutting_down: bool = False
 

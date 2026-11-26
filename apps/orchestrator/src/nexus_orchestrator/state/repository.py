@@ -119,6 +119,7 @@ class InvestigationRecord:
     deadline: datetime
     trace_context_json: str | None
     version: int
+    context_closed: bool = False  # the Context Service accepted the close (FR-125, FR-123)
 
     @classmethod
     def from_row(cls, row: aiosqlite.Row) -> InvestigationRecord:
@@ -130,6 +131,7 @@ class InvestigationRecord:
             deadline=parse_iso(row["deadline"]),
             trace_context_json=row["trace_context_json"],
             version=row["version"],
+            context_closed=bool(row["context_closed"]),
         )
 
 
@@ -441,6 +443,16 @@ class Repository:
             """UPDATE investigations SET tokens_used = tokens_used + ?, updated_at = ?,
                version = version + 1 WHERE id = ?""",
             (tokens, iso(now), investigation_id),
+        )
+
+    async def set_context_closed(
+        self, tx: Transaction, investigation_id: str, closed: bool, now: datetime
+    ) -> None:
+        """Record whether the Context Service close landed (``investigations.context_closed``)."""
+        await tx.execute(
+            """UPDATE investigations SET context_closed = ?, updated_at = ?,
+               version = version + 1 WHERE id = ?""",
+            (int(closed), iso(now), investigation_id),
         )
 
     async def _dropped(
