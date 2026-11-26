@@ -20,6 +20,7 @@ from nexus_shared.llm.schema import OutputParseError, parse_output
 
 ROOT = Path(__file__).resolve().parents[3]
 SCENARIOS = ROOT / "data/scenarios"
+AGENT_MANIFESTS = ROOT / "data/agent-manifests"  # what the agents mount: no oracle
 FIXTURES = ROOT / "data/fixtures"
 
 

@@ -17,7 +17,7 @@ import yaml
 
 from nexus_contracts.common import AgentId
 from nexus_contracts.scenario.fixtures import CommsLog, Fixture, SightingLog
-from nexus_contracts.scenario.manifest import EvidenceRef, ScenarioManifest
+from nexus_contracts.scenario.manifest import AgentManifest, EvidenceRef, ScenarioManifest
 
 MANIFEST_FILENAME = "manifest.yaml"
 
@@ -39,6 +39,13 @@ def load_manifest(path: Path) -> ScenarioManifest:
     with path.open(encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
     return ScenarioManifest.model_validate(raw)
+
+
+def load_agent_manifest(path: Path) -> AgentManifest:
+    """Parse and validate one oracle-free ``data/agent-manifests/<id>.json`` (agent runtime)."""
+    with path.open(encoding="utf-8") as fh:
+        raw = json.load(fh)
+    return AgentManifest.model_validate(raw)
 
 
 def load_evidence(ref: EvidenceRef, fixtures_root: Path) -> Fixture:

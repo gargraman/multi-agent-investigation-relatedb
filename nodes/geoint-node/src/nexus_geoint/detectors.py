@@ -19,7 +19,7 @@ from enum import StrEnum
 
 from nexus_contracts.common import EntityType
 from nexus_contracts.scenario.fixtures import SightingLog
-from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_contracts.scenario.manifest import AgentManifest
 
 _SUBJECT_TYPES = frozenset({EntityType.PERSON, EntityType.ASSET})
 
@@ -71,7 +71,7 @@ class Resolution:
     off_grid: int  # point outside the grid, or the cell has no LOCATION entity
 
 
-def resolve_sightings(manifest: ScenarioManifest, logs: Mapping[str, SightingLog]) -> Resolution:
+def resolve_sightings(manifest: AgentManifest, logs: Mapping[str, SightingLog]) -> Resolution:
     """Resolve subjects (exact id/alias, PERSON or ASSET only) and snap points to grid cells.
     Dropped observations are counted, never silently lost."""
     index = manifest.alias_index()
@@ -108,7 +108,7 @@ def _overlap(a: Sighting, b: Sighting) -> bool:
 
 
 def placement_candidates(
-    manifest: ScenarioManifest, sightings: Sequence[Sighting]
+    manifest: AgentManifest, sightings: Sequence[Sighting]
 ) -> list[PlacementCandidate]:
     """One candidate per (connected component, cell), sorted by (location, valid_from, observation
     ids). A sighting with no edge produces nothing."""

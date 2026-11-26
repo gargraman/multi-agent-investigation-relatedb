@@ -47,7 +47,7 @@ def test_frontend_cannot_reach_context_or_agents(services: dict) -> None:
 
 
 def test_agent_volume_sources_are_an_exact_allowlist(services: dict) -> None:
-    """Every ``*-agent`` mounts exactly: its state volume, the scenario manifests, its own
+    """Every ``*-agent`` mounts exactly: its state volume, the oracle-free agent manifests, its own
     fixtures and its own replay recordings. Anything broader (e.g. ``../../data``) fails."""
     agents = [n for n in services if n.endswith("-agent")]
     assert agents, "no *-agent services found"
@@ -55,12 +55,23 @@ def test_agent_volume_sources_are_an_exact_allowlist(services: dict) -> None:
         short = name.removesuffix("-agent")
         allowed = {
             f"{short}-state",
-            "../../data/scenarios",
+            "../../data/agent-manifests",
             f"../../data/fixtures/{short}",
             f"../../data/replay/{name}",
         }
         sources = [s.rstrip("/") for s in _volume_sources(services[name])]
         assert sorted(sources) == sorted(allowed), (name, sources)
+
+
+def test_agents_do_not_mount_the_oracle_bearing_scenarios(services: dict) -> None:
+    """Only the orchestrator mounts ``data/scenarios`` (full manifests, oracle included); the
+    agents get the generated oracle-free projection instead."""
+    agents = [n for n in services if n.endswith("-agent")]
+    assert agents
+    for name in agents:
+        sources = [s.rstrip("/") for s in _volume_sources(services[name])]
+        assert "../../data/scenarios" not in sources, name
+        assert "../../data/agent-manifests" in sources, name
 
 
 def test_read_only_data_mounts(services: dict) -> None:

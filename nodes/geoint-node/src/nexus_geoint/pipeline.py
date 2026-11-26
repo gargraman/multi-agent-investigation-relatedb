@@ -34,7 +34,7 @@ from nexus_contracts.api.findings import (
 from nexus_contracts.common import AgentId, Classification, FindingKind
 from nexus_contracts.scenario.fixtures import SightingLog
 from nexus_contracts.scenario.loader import EvidenceIntegrityError, load_evidence
-from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_contracts.scenario.manifest import AgentManifest
 from nexus_geoint.detectors import PlacementCandidate, placement_candidates, resolve_sightings
 from nexus_geoint.prompts import load_prompt
 from nexus_geoint.schemas import SCHEMA_VERSION, GeointLlmOutput, check_output
@@ -65,7 +65,7 @@ __all__ = [
 ]
 
 
-def validate_request(request: TaskRequest, manifest: ScenarioManifest | None) -> ErrorCode | None:
+def validate_request(request: TaskRequest, manifest: AgentManifest | None) -> ErrorCode | None:
     """FR-021 / §12 policy checks. ``TASK_REJECTED`` when the agent must refuse the task."""
     if request.task_type not in TASK_TYPES:
         return ErrorCode.TASK_REJECTED
@@ -134,7 +134,7 @@ def stored_summary(evidence_id: str, log: SightingLog) -> str:
     )
 
 
-def _classification_of(cand: PlacementCandidate, manifest: ScenarioManifest) -> Classification:
+def _classification_of(cand: PlacementCandidate, manifest: AgentManifest) -> Classification:
     return max(
         (manifest.evidence_ref(e).classification for e in cand.evidence_ids), key=lambda c: c.rank
     )
@@ -143,7 +143,7 @@ def _classification_of(cand: PlacementCandidate, manifest: ScenarioManifest) -> 
 def _draft(
     cand: PlacementCandidate,
     cls: Any,
-    manifest: ScenarioManifest,
+    manifest: AgentManifest,
     logs: Mapping[str, SightingLog],
     model_id: str,
     prompt: Prompt,
@@ -187,7 +187,7 @@ async def run(
     request: TaskRequest,
     *,
     provider: LLMProvider,
-    manifest: ScenarioManifest,
+    manifest: AgentManifest,
     fixtures_root: Path,
     budget: TokenBudget,
     tracer: trace.Tracer | None = None,

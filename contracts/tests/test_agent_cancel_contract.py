@@ -44,6 +44,7 @@ from nexus_shared.security import TokenRegistry
 
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS = ROOT / "data" / "scenarios"
+AGENT_MANIFESTS = ROOT / "data" / "agent-manifests"  # what the agents mount: no oracle
 SCENARIO = "baseline-corroboration"
 TOKEN = "o" * 40
 ORCH = {"Authorization": f"Bearer {TOKEN}"}
@@ -165,7 +166,7 @@ def _app(tmp_path: Path, spec: SlowSpec, cs: RecordingCS) -> FastAPI:
         service_token="s" * 40,
         nexus_llm_mode="replay",
         sqlite_path=tmp_path / "geoint-agent.sqlite",
-        scenarios_dir=SCENARIOS,
+        agent_manifests_dir=AGENT_MANIFESTS,
         fixtures_dir=tmp_path / "fixtures",
         replay_dir=tmp_path / "replay",
         context_service_url="http://cs",

@@ -138,8 +138,13 @@ class Template(_Model):
     tasks: list[TemplateTask] = Field(min_length=1)
 
 
-class ScenarioManifest(_Model):
-    """``data/scenarios/<id>/manifest.yaml`` (spec §11.3)."""
+class AgentManifest(_Model):
+    """The oracle-free manifest projection that specialist agents mount (S3 spec §10).
+
+    Everything an agent needs (grid, entities, evidence references, template) and nothing it must
+    never see: the oracle. ``data/agent-manifests/<id>.json`` is generated from the full manifest
+    by ``scripts/gen_scenario.py``. ``extra="forbid"`` means an ``oracle`` key is rejected here.
+    """
 
     scenario_id: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
     version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
@@ -149,7 +154,6 @@ class ScenarioManifest(_Model):
     grid: Grid
     entities: list[ManifestEntity] = Field(min_length=1)
     evidence: list[EvidenceRef] = Field(min_length=1)
-    oracle: Oracle
 
     # -- lookups -----------------------------------------------------------------------------
 
@@ -182,10 +186,9 @@ class ScenarioManifest(_Model):
     # -- cross-field validation --------------------------------------------------------------
 
     @model_validator(mode="after")
-    def _validate_references(self) -> ScenarioManifest:
+    def _validate_references(self) -> AgentManifest:
         self._check_entities()
         self._check_evidence_and_template()
-        self._check_oracle()
         return self
 
     def _check_entities(self) -> None:
@@ -241,6 +244,18 @@ class ScenarioManifest(_Model):
         unused = set(owners) - set(referenced)
         if unused:
             raise ValueError(f"evidence not referenced by any template task: {sorted(unused)}")
+
+
+class ScenarioManifest(AgentManifest):
+    """``data/scenarios/<id>/manifest.yaml`` (spec §11.3)."""
+
+    # The full manifest = the agent projection (AgentManifest) plus the oracle.
+    oracle: Oracle
+
+    @model_validator(mode="after")
+    def _validate_oracle(self) -> ScenarioManifest:
+        self._check_oracle()
+        return self
 
     def _check_oracle(self) -> None:
         entities = self._entities()

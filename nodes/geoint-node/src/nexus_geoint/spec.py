@@ -14,7 +14,7 @@ from opentelemetry import trace
 from nexus_contracts.a2a.task import TaskRequest
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.common import AgentId, Classification
-from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_contracts.scenario.manifest import AgentManifest
 from nexus_geoint import __version__, pipeline
 from nexus_shared.agent.spec import AgentSpec, PipelineOutcome
 from nexus_shared.llm import LLMProvider, TokenBudget
@@ -29,7 +29,7 @@ class GeointSpec:
     clearance: Classification = Classification.DEMO_MID  # = Context Service CLEARANCE
 
     def validate_request(
-        self, request: TaskRequest, manifest: ScenarioManifest | None
+        self, request: TaskRequest, manifest: AgentManifest | None
     ) -> ErrorCode | None:
         return pipeline.validate_request(request, manifest)
 
@@ -38,7 +38,7 @@ class GeointSpec:
         request: TaskRequest,
         *,
         provider: LLMProvider,
-        manifest: ScenarioManifest,
+        manifest: AgentManifest,
         fixtures_root: Path,
         budget: TokenBudget,
         tracer: trace.Tracer | None = None,

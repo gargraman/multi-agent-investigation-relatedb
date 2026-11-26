@@ -16,6 +16,7 @@ from nexus_contracts.scenario.loader import load_manifest
 
 ROOT = Path(__file__).resolve().parents[3]
 SCENARIOS = ROOT / "data/scenarios"
+AGENT_MANIFESTS = ROOT / "data/agent-manifests"  # what the agents mount: no oracle
 
 
 def make_request(

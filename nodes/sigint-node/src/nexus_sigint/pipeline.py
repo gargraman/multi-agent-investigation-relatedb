@@ -36,7 +36,7 @@ from nexus_contracts.api.findings import (
 from nexus_contracts.common import AgentId, Classification, FindingKind
 from nexus_contracts.scenario.fixtures import CommsLog
 from nexus_contracts.scenario.loader import EvidenceIntegrityError, load_evidence
-from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_contracts.scenario.manifest import AgentManifest
 from nexus_shared.agent.bands import band_for
 from nexus_shared.agent.llm_steps import FENCE_CLOSE, FENCE_OPEN, classify_with_repair, fence
 from nexus_shared.agent.prompts import Prompt
@@ -68,7 +68,7 @@ __all__ = [
 ]
 
 
-def validate_request(request: TaskRequest, manifest: ScenarioManifest | None) -> ErrorCode | None:
+def validate_request(request: TaskRequest, manifest: AgentManifest | None) -> ErrorCode | None:
     """FR-021 / §12 policy checks. ``TASK_REJECTED`` when the agent must refuse the task."""
     if request.task_type not in TASK_TYPES:
         return ErrorCode.TASK_REJECTED
@@ -141,7 +141,7 @@ def stored_summary(evidence_id: str, log: CommsLog) -> str:
     return f"Synthetic comms log {evidence_id}: {n} record{'s' if n != 1 else ''} ({mix}), {span}."
 
 
-def _classification_of(cand: ContactCandidate, manifest: ScenarioManifest) -> Classification:
+def _classification_of(cand: ContactCandidate, manifest: AgentManifest) -> Classification:
     return max(
         (manifest.evidence_ref(e).classification for e in cand.evidence_ids), key=lambda c: c.rank
     )
@@ -150,7 +150,7 @@ def _classification_of(cand: ContactCandidate, manifest: ScenarioManifest) -> Cl
 def _draft(
     cand: ContactCandidate,
     cls: Any,
-    manifest: ScenarioManifest,
+    manifest: AgentManifest,
     evidence: Mapping[str, CommsLog],
     model_id: str,
     prompt: Prompt,
@@ -195,7 +195,7 @@ async def run(
     request: TaskRequest,
     *,
     provider: LLMProvider,
-    manifest: ScenarioManifest,
+    manifest: AgentManifest,
     fixtures_root: Path,
     budget: TokenBudget,
     tracer: trace.Tracer | None = None,

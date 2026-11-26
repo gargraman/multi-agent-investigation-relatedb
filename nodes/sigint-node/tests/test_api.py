@@ -14,7 +14,7 @@ from nexus_shared.testing import InMemorySpanExporter
 from nexus_sigint.main import create_app
 from nexus_sigint.settings import SigintSettings
 
-from .conftest import FIXTURES, SCENARIOS, FakeProvider, make_request, valid_output
+from .conftest import AGENT_MANIFESTS, FIXTURES, FakeProvider, make_request, valid_output
 
 ORCH = {"Authorization": "Bearer " + "o" * 40}
 
@@ -42,7 +42,7 @@ def build(tmp_path: Path, provider: Any, stub: ContextStub) -> tuple[FastAPI, In
         service_token="s" * 40,
         nexus_llm_mode="replay",
         sqlite_path=tmp_path / "sigint.sqlite",
-        scenarios_dir=SCENARIOS,
+        agent_manifests_dir=AGENT_MANIFESTS,
         fixtures_dir=FIXTURES,
         replay_dir=tmp_path / "replay",
         context_service_url="http://cs",

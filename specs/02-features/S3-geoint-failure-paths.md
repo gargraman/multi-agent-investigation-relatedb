@@ -213,7 +213,7 @@ Every arrow is one SQLite transaction plus one timeline row, version-guarded (AD
 
 ## 10. Security and privacy
 
-- `geoint-agent` mounts its own state volume, `data/fixtures/geoint` and `data/replay/geoint-agent`, plus `data/scenarios` read-only (manifests, needed for alias resolution). Scenario manifests carry the `oracle` block; no agent code reads it, and an oracle-free agent projection of the manifest is an S3b item. The AC5 lint pins an exact per-agent allowlist of mount sources.
+- `geoint-agent` mounts its own state volume, `data/fixtures/geoint` and `data/replay/geoint-agent`, plus `data/scenarios` read-only (manifests, needed for alias resolution). Scenario manifests carry the `oracle` block; no agent code reads it. The AC5 lint pins an exact per-agent allowlist of mount sources.
 - Agent cancel accepts only the orchestrator token.
 - GEOINT stored summaries follow the S2 N11 rule. The `sensor` field and `summary` free text never reach the graph.
 - The `ev-geo-005` injection ("relocate to LOC-GRID-00", tripwire G2L) must not move any assertion: graph facts come from the detector only.

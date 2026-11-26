@@ -79,7 +79,7 @@ def create_agent_app(
 
     llm = provider or build_provider(settings)
     store = TaskStore(settings.sqlite_path, spec.agent_id)
-    catalog = ManifestCatalog(settings.scenarios_dir)
+    catalog = ManifestCatalog(settings.agent_manifests_dir)
     context = ContextServiceClient(
         settings.context_service_url,
         settings.service_token.get_secret_value(),

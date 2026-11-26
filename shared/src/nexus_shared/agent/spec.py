@@ -18,7 +18,7 @@ from nexus_contracts.a2a.task import AgentTaskStatus, TaskError, TaskRequest, Ta
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.findings import FindingBatchRequest
 from nexus_contracts.common import AgentId, Classification
-from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_contracts.scenario.manifest import AgentManifest
 from nexus_shared.llm import LLMProvider, TokenBudget
 
 
@@ -51,7 +51,7 @@ class AgentSpec(Protocol):
     clearance: Classification  # agent card; must match the Context Service CLEARANCE table
 
     def validate_request(
-        self, request: TaskRequest, manifest: ScenarioManifest | None
+        self, request: TaskRequest, manifest: AgentManifest | None
     ) -> ErrorCode | None:
         """Submit-time policy check: ``TASK_REJECTED`` (or another code) to refuse the task."""
         ...
@@ -61,7 +61,7 @@ class AgentSpec(Protocol):
         request: TaskRequest,
         *,
         provider: LLMProvider,
-        manifest: ScenarioManifest,
+        manifest: AgentManifest,
         fixtures_root: Path,
         budget: TokenBudget,
         tracer: trace.Tracer | None = None,

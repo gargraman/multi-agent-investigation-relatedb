@@ -10,7 +10,7 @@ from nexus_geoint.settings import GeointSettings
 from nexus_shared.security import TokenRegistry
 from nexus_shared.testing import InMemorySpanExporter
 
-from .conftest import FIXTURES, SCENARIOS, ScriptedProvider, make_request, valid_output_for
+from .conftest import AGENT_MANIFESTS, FIXTURES, ScriptedProvider, make_request, valid_output_for
 
 ORCH = {"Authorization": "Bearer " + "o" * 40}
 
@@ -33,7 +33,7 @@ async def test_api_card_and_submit(tmp_path: Path) -> None:
         service_token="s" * 40,
         nexus_llm_mode="replay",
         sqlite_path=tmp_path / "geoint.sqlite",
-        scenarios_dir=SCENARIOS,
+        agent_manifests_dir=AGENT_MANIFESTS,
         fixtures_dir=FIXTURES,
         replay_dir=tmp_path / "replay",
         context_service_url="http://cs",

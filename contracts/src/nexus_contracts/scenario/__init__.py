@@ -12,12 +12,14 @@ from nexus_contracts.scenario.fixtures import (
 from nexus_contracts.scenario.loader import (
     EvidenceIntegrityError,
     LoadedScenario,
+    load_agent_manifest,
     load_evidence,
     load_manifest,
     load_scenario,
     sha256_file,
 )
 from nexus_contracts.scenario.manifest import (
+    AgentManifest,
     EvidenceRef,
     Grid,
     ManifestEntity,
@@ -37,6 +39,7 @@ from nexus_contracts.scenario.oracle import (
 __all__ = [
     "GEOINT_SCHEMA",
     "SIGINT_SCHEMA",
+    "AgentManifest",
     "CommsLog",
     "CommsRecord",
     "EvidenceIntegrityError",
@@ -56,6 +59,7 @@ __all__ = [
     "SightingLog",
     "Template",
     "TemplateTask",
+    "load_agent_manifest",
     "load_evidence",
     "load_manifest",
     "load_scenario",

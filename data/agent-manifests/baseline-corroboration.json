@@ -1,0 +1,650 @@
+{
+  "entities": [
+    {
+      "aliases": [
+        "subject-alpha"
+      ],
+      "display_name": "Subject ALPHA",
+      "id": "ENT-ALPHA",
+      "type": "PERSON"
+    },
+    {
+      "aliases": [
+        "subject-bravo"
+      ],
+      "display_name": "Subject BRAVO",
+      "id": "ENT-BRAVO",
+      "type": "PERSON"
+    },
+    {
+      "aliases": [
+        "subject-charlie"
+      ],
+      "display_name": "Subject CHARLIE",
+      "id": "ENT-CHARLIE",
+      "type": "PERSON"
+    },
+    {
+      "aliases": [
+        "subject-delta"
+      ],
+      "display_name": "Subject DELTA",
+      "id": "ENT-DELTA",
+      "type": "PERSON"
+    },
+    {
+      "aliases": [
+        "subject-echo"
+      ],
+      "display_name": "Subject ECHO",
+      "id": "ENT-ECHO",
+      "type": "PERSON"
+    },
+    {
+      "aliases": [
+        "subject-foxtrot"
+      ],
+      "display_name": "Subject FOXTROT",
+      "id": "ENT-FOXTROT",
+      "type": "PERSON"
+    },
+    {
+      "aliases": [
+        "kestrel-7@relay.example.invalid"
+      ],
+      "display_name": "kestrel-7",
+      "id": "HDL-ALPHA-1",
+      "type": "HANDLE",
+      "used_by": "ENT-ALPHA"
+    },
+    {
+      "aliases": [
+        "kestrel-alt@mesh.example.invalid"
+      ],
+      "display_name": "kestrel-alt",
+      "id": "HDL-ALPHA-2",
+      "type": "HANDLE",
+      "used_by": "ENT-ALPHA"
+    },
+    {
+      "aliases": [
+        "osprey-9@relay.example.invalid"
+      ],
+      "display_name": "osprey-9",
+      "id": "HDL-BRAVO-1",
+      "type": "HANDLE",
+      "used_by": "ENT-BRAVO"
+    },
+    {
+      "aliases": [
+        "marten-3@relay.example.invalid"
+      ],
+      "display_name": "marten-3",
+      "id": "HDL-CHARLIE-1",
+      "type": "HANDLE",
+      "used_by": "ENT-CHARLIE"
+    },
+    {
+      "aliases": [
+        "heron-5@mesh.example.invalid"
+      ],
+      "display_name": "heron-5",
+      "id": "HDL-DELTA-1",
+      "type": "HANDLE",
+      "used_by": "ENT-DELTA"
+    },
+    {
+      "aliases": [
+        "lynx-2@mesh.example.invalid"
+      ],
+      "display_name": "lynx-2",
+      "id": "HDL-ECHO-1",
+      "type": "HANDLE",
+      "used_by": "ENT-ECHO"
+    },
+    {
+      "aliases": [
+        "wren-8@relay.example.invalid"
+      ],
+      "display_name": "wren-8",
+      "id": "HDL-FOXTROT-1",
+      "type": "HANDLE",
+      "used_by": "ENT-FOXTROT"
+    },
+    {
+      "aliases": [
+        "stoat-0@relay.example.invalid"
+      ],
+      "display_name": "stoat-0",
+      "id": "HDL-UNATTRIB-1",
+      "type": "HANDLE"
+    },
+    {
+      "aliases": [
+        "vehicle-grey-van"
+      ],
+      "display_name": "Grey panel van (fictional)",
+      "id": "AST-VAN-1",
+      "type": "ASSET"
+    },
+    {
+      "aliases": [
+        "obsidian-loom"
+      ],
+      "display_name": "Obsidian Loom Collective (fictional)",
+      "id": "ORG-OBSIDIAN-LOOM",
+      "type": "ORG"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C0-R0",
+      "id": "LOC-GRID-00",
+      "position": {
+        "x": 50,
+        "y": 50
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C1-R0",
+      "id": "LOC-GRID-01",
+      "position": {
+        "x": 150,
+        "y": 50
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C2-R0",
+      "id": "LOC-GRID-02",
+      "position": {
+        "x": 250,
+        "y": 50
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C3-R0",
+      "id": "LOC-GRID-03",
+      "position": {
+        "x": 350,
+        "y": 50
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C4-R0",
+      "id": "LOC-GRID-04",
+      "position": {
+        "x": 450,
+        "y": 50
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C5-R0",
+      "id": "LOC-GRID-05",
+      "position": {
+        "x": 550,
+        "y": 50
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C0-R1",
+      "id": "LOC-GRID-06",
+      "position": {
+        "x": 50,
+        "y": 150
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C1-R1",
+      "id": "LOC-GRID-07",
+      "position": {
+        "x": 150,
+        "y": 150
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C2-R1",
+      "id": "LOC-GRID-08",
+      "position": {
+        "x": 250,
+        "y": 150
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C3-R1",
+      "id": "LOC-GRID-09",
+      "position": {
+        "x": 350,
+        "y": 150
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C4-R1",
+      "id": "LOC-GRID-10",
+      "position": {
+        "x": 450,
+        "y": 150
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C5-R1",
+      "id": "LOC-GRID-11",
+      "position": {
+        "x": 550,
+        "y": 150
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C0-R2",
+      "id": "LOC-GRID-12",
+      "position": {
+        "x": 50,
+        "y": 250
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C1-R2",
+      "id": "LOC-GRID-13",
+      "position": {
+        "x": 150,
+        "y": 250
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C2-R2",
+      "id": "LOC-GRID-14",
+      "position": {
+        "x": 250,
+        "y": 250
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C3-R2",
+      "id": "LOC-GRID-15",
+      "position": {
+        "x": 350,
+        "y": 250
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C4-R2",
+      "id": "LOC-GRID-16",
+      "position": {
+        "x": 450,
+        "y": 250
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C5-R2",
+      "id": "LOC-GRID-17",
+      "position": {
+        "x": 550,
+        "y": 250
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C0-R3",
+      "id": "LOC-GRID-18",
+      "position": {
+        "x": 50,
+        "y": 350
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C1-R3",
+      "id": "LOC-GRID-19",
+      "position": {
+        "x": 150,
+        "y": 350
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C2-R3",
+      "id": "LOC-GRID-20",
+      "position": {
+        "x": 250,
+        "y": 350
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C3-R3",
+      "id": "LOC-GRID-21",
+      "position": {
+        "x": 350,
+        "y": 350
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C4-R3",
+      "id": "LOC-GRID-22",
+      "position": {
+        "x": 450,
+        "y": 350
+      },
+      "type": "LOCATION"
+    },
+    {
+      "aliases": [],
+      "display_name": "Vellmark cell C5-R3",
+      "id": "LOC-GRID-23",
+      "position": {
+        "x": 550,
+        "y": 350
+      },
+      "type": "LOCATION"
+    }
+  ],
+  "evidence": [
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-001.json",
+      "id": "ev-sig-001",
+      "owner_node": "sigint-agent",
+      "sha256": "47b74a015a8fdf2120b56bda77b63577fca5df2c4b6d4413acdabb879e6319cd"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-002.json",
+      "id": "ev-sig-002",
+      "owner_node": "sigint-agent",
+      "sha256": "1d31918d44674f7a74b0c8f6376145bf44d7a78f967f4d2822bc631f65af70ac"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-003.json",
+      "id": "ev-sig-003",
+      "owner_node": "sigint-agent",
+      "sha256": "b4c3f18de0b82a5c14304f454ae77fd3c913de402a2067bbb45e7ce5bda78a3c"
+    },
+    {
+      "classification": "DEMO-MID",
+      "file": "sigint/baseline-corroboration/ev-sig-004.json",
+      "id": "ev-sig-004",
+      "owner_node": "sigint-agent",
+      "sha256": "55691e1f30a9c582891410bbed07b037f2ca2d326f7aace125e1f7a68e8fdeae"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-005.json",
+      "id": "ev-sig-005",
+      "owner_node": "sigint-agent",
+      "sha256": "d5ea150a53df80f8faf819b14a05911bf46cfc45ac7b2bddb845e906da379302"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-006.json",
+      "id": "ev-sig-006",
+      "owner_node": "sigint-agent",
+      "sha256": "bcd77d70a1fe5d072c8cb530e3ebf36cb9c4e0e0afc0c1769e9ebe4bd06390a6"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-007.json",
+      "id": "ev-sig-007",
+      "owner_node": "sigint-agent",
+      "sha256": "d335260262c8689e1826e0d879451f5661ccf85dd40c26c1cd7094c56bff99f4"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-008.json",
+      "id": "ev-sig-008",
+      "owner_node": "sigint-agent",
+      "sha256": "ccd368c0d799bbf66faac07870ab1befb05a831ada4a70aae7b4f67d0b4abd2b"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-009.json",
+      "id": "ev-sig-009",
+      "owner_node": "sigint-agent",
+      "sha256": "62838bc399e8f38c7675440f7cbdbe545ca9ad086d87055f29683eb53a278cb6"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-010.json",
+      "id": "ev-sig-010",
+      "owner_node": "sigint-agent",
+      "sha256": "1fb303b0119cbb2fc396120a1970eb65d92ef254da5183e1f0d692192849ec88"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-011.json",
+      "id": "ev-sig-011",
+      "owner_node": "sigint-agent",
+      "sha256": "56cf7007f8af67fd76e68f70fbbf75d47051c57838be676060c04cb3bd57bddf"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-012.json",
+      "id": "ev-sig-012",
+      "owner_node": "sigint-agent",
+      "sha256": "d87c19fefb2061d1788833cf13b6d12ad97899f88b80a57fcfa06ef4e885295f"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-013.json",
+      "id": "ev-sig-013",
+      "owner_node": "sigint-agent",
+      "sha256": "850ec1e3eea25efbce854c78ba6c93cf0ce42352b5b4a5f43ec061fa790b66a7"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "sigint/baseline-corroboration/ev-sig-014.json",
+      "id": "ev-sig-014",
+      "owner_node": "sigint-agent",
+      "sha256": "f956747bb9b7f979027e2a49c5ff96d27bb9557719bf3f2d08b520edc286859e"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-001.json",
+      "id": "ev-geo-001",
+      "owner_node": "geoint-agent",
+      "sha256": "26cd4963c3c65486e2cae0d575230bca7efa581b1327d7e0499a84a906e34575"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-002.json",
+      "id": "ev-geo-002",
+      "owner_node": "geoint-agent",
+      "sha256": "55dc1bc9714e40ea6dae2e8fa131a0eb6c0570e6b313a9a15d34024733420b6c"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-003.json",
+      "id": "ev-geo-003",
+      "owner_node": "geoint-agent",
+      "sha256": "52e28b3b41ebdde6eb05522f7dc27d39b164ec4b61050b64db24a2a065e02766"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-004.json",
+      "id": "ev-geo-004",
+      "owner_node": "geoint-agent",
+      "sha256": "6dda26a7e0d0404a371e05c6bc2bd6f5be43b0c3fa5705cb66dbabda5b404c2e"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-005.json",
+      "id": "ev-geo-005",
+      "owner_node": "geoint-agent",
+      "sha256": "45b9b4552cb639c0ecd4be4a7c5101e78a4c658e439909259ffe9e2eb982f827"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-006.json",
+      "id": "ev-geo-006",
+      "owner_node": "geoint-agent",
+      "sha256": "dc216b814944e35b8a78becefefdf5727a8f6d670ab2ec095e65cfd797647f9f"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-007.json",
+      "id": "ev-geo-007",
+      "owner_node": "geoint-agent",
+      "sha256": "a67179b63903f2a2baca219c4509642b55a3ca0a27b1a06417061dc058455135"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-008.json",
+      "id": "ev-geo-008",
+      "owner_node": "geoint-agent",
+      "sha256": "e23a1e712d6efcef7f9b476546c6e32b0256c0e67f70e7f0c4a0bb7d64fa665a"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-009.json",
+      "id": "ev-geo-009",
+      "owner_node": "geoint-agent",
+      "sha256": "05764bab5be5782992a51254f0c25f0b7dfdae7f1c1a4f6c53bfffd9931a56b4"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-010.json",
+      "id": "ev-geo-010",
+      "owner_node": "geoint-agent",
+      "sha256": "466459bdd2f823964a41234012d5719ade91c65a2f187d7d75738225ad95a4dc"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-011.json",
+      "id": "ev-geo-011",
+      "owner_node": "geoint-agent",
+      "sha256": "5ea31beb844e1438adcf4f9372b93caad1b3163baf410732be277b4672a40ef7"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-012.json",
+      "id": "ev-geo-012",
+      "owner_node": "geoint-agent",
+      "sha256": "90214895c1fcdd9ded09812b36847def098f590499dbb2b6d52428a377e5f363"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-013.json",
+      "id": "ev-geo-013",
+      "owner_node": "geoint-agent",
+      "sha256": "f47bc0dd9282cccb036e59bdb2686c6c9fcd4f73731bd5db908ba3a18ce64440"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-014.json",
+      "id": "ev-geo-014",
+      "owner_node": "geoint-agent",
+      "sha256": "d53a7a04b535dd76dc6126c75a61508d6ced85a484d99f12f144a18ee85630b2"
+    },
+    {
+      "classification": "DEMO-LOW",
+      "file": "geoint/baseline-corroboration/ev-geo-015.json",
+      "id": "ev-geo-015",
+      "owner_node": "geoint-agent",
+      "sha256": "fc60ab49673877a8346a934650e89f94e748916b482b138736871947f0245a20"
+    }
+  ],
+  "grid": {
+    "cols": 6,
+    "origin": {
+      "x": 0,
+      "y": 0
+    },
+    "pitch": 100,
+    "rows": 4
+  },
+  "objective": "Identify recurring contact and co-location patterns among the fictional subjects in the supplied synthetic metadata, and assess whether any subjects are connected.",
+  "scenario_id": "baseline-corroboration",
+  "synthetic": true,
+  "template": {
+    "tasks": [
+      {
+        "agent": "sigint-agent",
+        "input_refs": [
+          "ev-sig-001",
+          "ev-sig-002",
+          "ev-sig-003",
+          "ev-sig-004",
+          "ev-sig-005",
+          "ev-sig-006",
+          "ev-sig-007",
+          "ev-sig-008",
+          "ev-sig-009",
+          "ev-sig-010",
+          "ev-sig-011",
+          "ev-sig-012",
+          "ev-sig-013",
+          "ev-sig-014"
+        ],
+        "task_type": "analyze_synthetic_communications",
+        "token_share": 0.25
+      },
+      {
+        "agent": "geoint-agent",
+        "input_refs": [
+          "ev-geo-001",
+          "ev-geo-002",
+          "ev-geo-003",
+          "ev-geo-004",
+          "ev-geo-005",
+          "ev-geo-006",
+          "ev-geo-007",
+          "ev-geo-008",
+          "ev-geo-009",
+          "ev-geo-010",
+          "ev-geo-011",
+          "ev-geo-012",
+          "ev-geo-013",
+          "ev-geo-014",
+          "ev-geo-015"
+        ],
+        "task_type": "analyze_synthetic_geospatial",
+        "token_share": 0.25
+      },
+      {
+        "agent": "analysis-agent",
+        "input_refs": [],
+        "task_type": "assess_findings",
+        "token_share": 0.5
+      }
+    ]
+  },
+  "version": "1.0.0"
+}

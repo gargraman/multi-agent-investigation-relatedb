@@ -11,6 +11,8 @@ For each ``data/scenarios/<id>/`` with a ``generator.yaml``:
      (fixed seed => byte-identical output; the Faker version is pinned by uv.lock).
   2. Recompute the sha256 of EVERY evidence file (signal and noise) and rewrite only the
      quoted ``sha256: "…"`` values in ``manifest.yaml`` (comments and layout are preserved).
+  3. Write ``data/agent-manifests/<id>.json`` = the manifest minus its ``oracle`` block (what the
+     agents mount; the oracle never reaches an agent container).
 Hand-authored signal files (evidence ids not listed under ``noise``) are read, never written.
 
 Noise is constrained so it cannot change what the oracle expects:
@@ -43,11 +45,18 @@ import yaml
 from faker import Faker
 
 from nexus_contracts.common import AgentId, EntityType
-from nexus_contracts.scenario import GEOINT_SCHEMA, SIGINT_SCHEMA, ScenarioManifest, load_manifest
+from nexus_contracts.scenario import (
+    GEOINT_SCHEMA,
+    SIGINT_SCHEMA,
+    AgentManifest,
+    ScenarioManifest,
+    load_manifest,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 NOISE_DOMAINS = ["relay.example.invalid", "mesh.example.invalid"]
+AGENT_MANIFESTS_DIRNAME = "agent-manifests"
 COLLECTORS = ["relay-tap-north", "relay-tap-south", "mesh-tap-east", "mesh-tap-west"]
 SENSORS = ["mast-03", "mast-07", "mast-north-11", "drone-relay-2", "drone-relay-4"]
 SUBJECT_KINDS = ["vehicle", "pedestrian", "cyclist"]
@@ -300,7 +309,24 @@ class ScenarioGenerator:
             if n != 1:
                 raise SystemExit(f"{manifest_path}: expected one sha256 for {eid}, found {n}")
         rendered[manifest_path] = text.encode("utf-8")
+        rendered[self.agent_manifest_path()] = self.render_agent_manifest(text)
         return rendered
+
+    def agent_manifest_path(self) -> Path:
+        return (
+            self.scenario_dir.parent.parent
+            / AGENT_MANIFESTS_DIRNAME
+            / (f"{self.manifest.scenario_id}.json")
+        )
+
+    @staticmethod
+    def render_agent_manifest(manifest_text: str) -> bytes:
+        """The manifest minus its ``oracle`` block: what agents mount (never the oracle)."""
+        raw = yaml.safe_load(manifest_text)
+        raw.pop("oracle")
+        data = dump_json(raw)
+        AgentManifest.model_validate_json(data)  # the projection must stay loadable by agents
+        return data
 
 
 def main(argv: list[str] | None = None) -> int:

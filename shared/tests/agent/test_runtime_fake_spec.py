@@ -19,14 +19,14 @@ from opentelemetry import trace
 from nexus_contracts.a2a.task import AgentTaskStatus, TaskRequest, TaskUsage
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.common import AgentId, Classification
-from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_contracts.scenario.manifest import AgentManifest
 from nexus_shared.agent.app import create_agent_app, lazy_app
 from nexus_shared.agent.settings import AgentSettings
 from nexus_shared.agent.spec import AgentSpec, PipelineOutcome
 from nexus_shared.llm import LLMProvider, TokenBudget
 from nexus_shared.security import TokenRegistry
 
-from .conftest import SCENARIOS, make_batch, make_request
+from .conftest import AGENT_MANIFESTS, make_batch, make_request
 
 ORCH = {"Authorization": "Bearer " + "o" * 40}
 
@@ -49,7 +49,7 @@ class FakeSpec:
     error: Exception | None = None
 
     def validate_request(
-        self, request: TaskRequest, manifest: ScenarioManifest | None
+        self, request: TaskRequest, manifest: AgentManifest | None
     ) -> ErrorCode | None:
         if request.task_type not in self.task_types or manifest is None:
             return ErrorCode.TASK_REJECTED
@@ -60,7 +60,7 @@ class FakeSpec:
         request: TaskRequest,
         *,
         provider: LLMProvider,
-        manifest: ScenarioManifest,
+        manifest: AgentManifest,
         fixtures_root: Path,
         budget: TokenBudget,
         tracer: trace.Tracer | None = None,
@@ -101,7 +101,7 @@ def settings_for(tmp_path: Path, *, service_name: str) -> AgentSettings:
         service_token="s" * 40,
         nexus_llm_mode="replay",
         sqlite_path=tmp_path / f"{service_name}.sqlite",
-        scenarios_dir=SCENARIOS,
+        agent_manifests_dir=AGENT_MANIFESTS,
         fixtures_dir=tmp_path / "fixtures",
         replay_dir=tmp_path / "replay",
         context_service_url="http://cs",

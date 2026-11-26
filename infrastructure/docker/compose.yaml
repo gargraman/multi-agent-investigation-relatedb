@@ -86,7 +86,7 @@ services:
       NEXUS_TOKEN_ORCHESTRATOR: ${NEXUS_TOKEN_ORCHESTRATOR:?run make secrets}
       CONTEXT_SERVICE_URL: http://context-service:8000
       SQLITE_PATH: /data/sigint.sqlite
-      SCENARIOS_DIR: /app/data/scenarios
+      AGENT_MANIFESTS_DIR: /app/data/agent-manifests
       FIXTURES_DIR: /app/data/fixtures            # manifest `file:` paths resolve under here
       REPLAY_DIR: /app/data/replay
       # No runtime switch (ADR-006 E4): change mode by restarting (`make demo-replay`).
@@ -99,7 +99,7 @@ services:
     secrets: [extra_ca]
     volumes:
       - sigint-state:/data
-      - ../../data/scenarios:/app/data/scenarios:ro
+      - ../../data/agent-manifests:/app/data/agent-manifests:ro   # oracle-free manifests only
       - ../../data/fixtures/sigint:/app/data/fixtures/sigint:ro      # own fixtures only (§6.3)
       - ../../data/replay/sigint-agent:/app/data/replay/sigint-agent:ro
     # nexus-context: orchestrator <-> agent <-> Context Service (internal, no egress).
@@ -126,7 +126,7 @@ services:
       NEXUS_TOKEN_ORCHESTRATOR: ${NEXUS_TOKEN_ORCHESTRATOR:?run make secrets}
       CONTEXT_SERVICE_URL: http://context-service:8000
       SQLITE_PATH: /data/geoint.sqlite
-      SCENARIOS_DIR: /app/data/scenarios
+      AGENT_MANIFESTS_DIR: /app/data/agent-manifests
       FIXTURES_DIR: /app/data/fixtures            # manifest `file:` paths resolve under here
       REPLAY_DIR: /app/data/replay
       # No runtime switch (ADR-006 E4): change mode by restarting (`make demo-replay`).
@@ -139,7 +139,7 @@ services:
     secrets: [extra_ca]
     volumes:
       - geoint-state:/data
-      - ../../data/scenarios:/app/data/scenarios:ro
+      - ../../data/agent-manifests:/app/data/agent-manifests:ro   # oracle-free manifests only
       - ../../data/fixtures/geoint:/app/data/fixtures/geoint:ro      # own fixtures only (§6.3)
       - ../../data/replay/geoint-agent:/app/data/replay/geoint-agent:ro
     # nexus-context: orchestrator <-> agent <-> Context Service (internal, no egress).

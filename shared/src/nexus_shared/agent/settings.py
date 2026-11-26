@@ -5,7 +5,7 @@ defaults here, so two agents can never share a task database by accident).
 
 Env vars (no prefix): ``SERVICE_TOKEN`` (this agent's own token, sent to the Context Service),
 ``NEXUS_TOKEN_ORCHESTRATOR`` (the only token accepted on ``/v1/tasks``; read by
-``load_token_registry``), ``CONTEXT_SERVICE_URL``, ``SQLITE_PATH``, ``SCENARIOS_DIR``,
+``load_token_registry``), ``CONTEXT_SERVICE_URL``, ``SQLITE_PATH``, ``AGENT_MANIFESTS_DIR``,
 ``FIXTURES_DIR``, ``NEXUS_LLM_MODE`` (live|replay, no runtime switch), ``REPLAY_DIR``,
 ``NEXUS_REPLAY_LATENCY_MS`` (chaos only, default 0, refused in live mode),
 ``OPENAI_API_KEY`` (required in live mode), ``OPENAI_MODEL_EXTRACT``, ``OPENAI_TIMEOUT_SECONDS``,
@@ -38,7 +38,7 @@ ACCEPTED_CALLERS: tuple[str, ...] = (ORCHESTRATOR,)
 class AgentSettings(ServiceSettings):
     context_service_url: str = "http://context-service:8000"
     sqlite_path: Path
-    scenarios_dir: Path = Path("data/scenarios")
+    agent_manifests_dir: Path = Path("data/agent-manifests")
     fixtures_dir: Path = Path("data/fixtures")
 
     nexus_llm_mode: LlmMode = LlmMode.LIVE

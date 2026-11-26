@@ -202,7 +202,7 @@ def _agent_app(agent: AgentId, tmp_path: Path, cs_requests: list[httpx.Request])
         service_token="s" * 40,
         nexus_llm_mode="replay",
         sqlite_path=tmp_path / f"{agent.value}.sqlite",
-        scenarios_dir=SCENARIOS_DIR,
+        agent_manifests_dir=SCENARIOS_DIR.parent / "agent-manifests",
         fixtures_dir=FIXTURES_DIR,
         replay_dir=tmp_path / "replay",
         context_service_url="http://cs",

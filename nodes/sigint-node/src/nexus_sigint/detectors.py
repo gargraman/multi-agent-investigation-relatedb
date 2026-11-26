@@ -16,7 +16,7 @@ from datetime import datetime
 from nexus_contracts.api.findings import canonical_link_pair
 from nexus_contracts.common import EntityType
 from nexus_contracts.scenario.fixtures import CommsLog
-from nexus_contracts.scenario.manifest import ScenarioManifest
+from nexus_contracts.scenario.manifest import AgentManifest
 
 MIN_CONTACTS = 2
 """G6: "recurring" = at least two contact records per canonical pair across the task's evidence."""
@@ -51,9 +51,7 @@ class ContactCandidate:
         return max(c.end for c in self.contacts)
 
 
-def resolve_handle(
-    mention: str, manifest: ScenarioManifest, index: Mapping[str, str]
-) -> str | None:
+def resolve_handle(mention: str, manifest: AgentManifest, index: Mapping[str, str]) -> str | None:
     """Exact id/alias match (spec §11.4 step 1) to a HANDLE entity, else ``None``."""
     entity_id = index.get(mention)
     if entity_id is None or manifest.entity(entity_id).type is not EntityType.HANDLE:
@@ -62,7 +60,7 @@ def resolve_handle(
 
 
 def recurring_contacts(
-    manifest: ScenarioManifest,
+    manifest: AgentManifest,
     evidence: Mapping[str, CommsLog],
     *,
     min_contacts: int = MIN_CONTACTS,
