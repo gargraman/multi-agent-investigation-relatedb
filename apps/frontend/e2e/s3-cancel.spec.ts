@@ -2,16 +2,33 @@
  * FR-150 (S3b): the operator cancels a running investigation from the UI.
  * Runs against a REAL stack at BASE_URL (default http://localhost:3000). No route mocking.
  *
+ * Skipped unless NEXUS_E2E_REPLAY=1: this spec creates an investigation, which on a live-LLM stack
+ * means real OpenAI calls. Set the flag only when the stack runs in replay mode.
+ *
  * Needs the replay + chaos override so the agents' replay latency (20 s per call) keeps the
  * investigation non-terminal long enough to click Cancel. The same layering scripts/chaos.sh uses:
  *   docker compose -p nexus -f infrastructure/docker/compose.yaml \
  *     -f infrastructure/docker/compose.chaos.yaml --env-file .env up -d --build --wait
- *   BASE_URL=http://localhost:3000 npm run test:e2e -- s3-cancel
+ *   NEXUS_E2E_REPLAY=1 BASE_URL=http://localhost:3000 npm run test:e2e -- s3-cancel
  * Restore the default stack afterwards by re-applying compose.yaml alone.
  */
 import { expect, test } from "@playwright/test";
 
 const SCENARIO = "baseline-corroboration";
+
+test.skip(process.env.NEXUS_E2E_REPLAY !== "1", "needs a replay-mode stack: set NEXUS_E2E_REPLAY=1");
+
+// Whatever happens after creation, never leave the investigation running (it would keep
+// dispatching agent work). 409 (already terminal) and 404 are fine.
+let createdId: string | null = null;
+
+test.afterEach(async ({ request }) => {
+  if (!createdId) return;
+  const id = createdId;
+  createdId = null;
+  const res = await request.post(`/api/v1/investigations/${encodeURIComponent(id)}/cancel`);
+  expect([200, 404, 409]).toContain(res.status());
+});
 
 test("FR-150: operator cancels a running investigation from the UI", async ({ page }) => {
   await page.goto("/");
@@ -22,6 +39,7 @@ test("FR-150: operator cancels a running investigation from the UI", async ({ pa
   );
   await page.getByRole("button", { name: "Create investigation" }).click();
   const inv = (await (await created).json()) as { id: string };
+  createdId = inv.id;
   await expect(page).toHaveURL(new RegExp(`/investigations/${encodeURIComponent(inv.id)}$`));
 
   const status = page.getByTestId("investigation-status");
