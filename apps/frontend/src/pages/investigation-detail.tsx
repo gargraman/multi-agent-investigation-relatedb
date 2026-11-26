@@ -1,12 +1,23 @@
-import { ArrowClockwise, Robot } from "@phosphor-icons/react";
+import { ArrowClockwise, Prohibit, Robot } from "@phosphor-icons/react";
+import { useState } from "react";
 import { useParams } from "react-router";
 
-import { api } from "@/api/client";
+import { api, ApiError } from "@/api/client";
 import { latestStatus, summarize } from "@/api/timeline";
-import type { Investigation, TimelineEvent } from "@/api/types";
+import type { Investigation, InvestigationCancelResponse, InvestigationStatus, TimelineEvent } from "@/api/types";
 import { ConnectionBadge } from "@/components/connection-badge";
 import { ProblemAlert } from "@/components/problem-alert";
 import { StatusBadge } from "@/components/status-badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInvestigationEvents } from "@/hooks/use-investigation-events";
@@ -23,6 +34,8 @@ function InvestigationDetail({ id }: { id: string }) {
   // Re-read the investigation whenever a state change lands, so header + tasks stay current.
   const changeCount = events.filter((e) => e.type.endsWith("status_changed")).length;
   const inv = useResource((s) => api.getInvestigation(id, s), [id, changeCount]);
+  // A successful cancel returns the new status; hold it so the page does not wait for the next refresh.
+  const [cancelledStatus, setCancelledStatus] = useState<InvestigationStatus | null>(null);
 
   if (inv.state === "loading" && !inv.data) return <DetailSkeleton />;
   if (inv.state === "error" && !inv.data) {
@@ -40,11 +53,15 @@ function InvestigationDetail({ id }: { id: string }) {
     );
   }
   const data = inv.data!;
-  const status = latestStatus(events) ?? data.status;
+  const status = cancelledStatus ?? latestStatus(events) ?? data.status;
+  const onCancelled = (res: InvestigationCancelResponse) => {
+    setCancelledStatus(res.status);
+    inv.reload();
+  };
 
   return (
     <div className="grid gap-8">
-      <Header inv={data} status={status} />
+      <Header inv={data} status={status} onCancelled={onCancelled} onStale={inv.reload} />
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <Timeline events={events} state={state} />
         <aside className="grid content-start gap-8">
@@ -61,7 +78,17 @@ function InvestigationDetail({ id }: { id: string }) {
   );
 }
 
-function Header({ inv, status }: { inv: Investigation; status: string }) {
+function Header({
+  inv,
+  status,
+  onCancelled,
+  onStale,
+}: {
+  inv: Investigation;
+  status: string;
+  onCancelled: (res: InvestigationCancelResponse) => void;
+  onStale: () => void;
+}) {
   const facts: [string, string][] = [
     ["Scenario", inv.scenario_id],
     ["Created", formatDateTime(inv.created_at)],
@@ -77,6 +104,7 @@ function Header({ inv, status }: { inv: Investigation; status: string }) {
         <StatusBadge status={status} data-testid="investigation-status" />
         {inv.status_reason && <span className="font-mono text-xs text-muted-foreground">{inv.status_reason}</span>}
       </div>
+      <CancelControl id={inv.id} status={status} onCancelled={onCancelled} onStale={onStale} />
       <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
         {facts.map(([k, v]) => (
           <div key={k} className="min-w-0">
@@ -88,6 +116,76 @@ function Header({ inv, status }: { inv: Investigation; status: string }) {
         ))}
       </dl>
     </header>
+  );
+}
+
+const CANCELLABLE: readonly string[] = ["CREATED", "RUNNING", "ANALYZING"];
+
+function CancelControl({
+  id,
+  status,
+  onCancelled,
+  onStale,
+}: {
+  id: string;
+  status: string;
+  onCancelled: (res: InvestigationCancelResponse) => void;
+  onStale: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<InvestigationCancelResponse | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.cancelInvestigation(id);
+      setResult(res);
+      onCancelled(res);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err
+          : new ApiError({ type: "about:blank", title: "Unexpected error", status: 0, detail: String(err) }),
+      );
+      // A 409 means our view is stale (already terminal): re-read so the page shows the real status.
+      onStale();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canCancel = CANCELLABLE.includes(status) && !result;
+  if (!canCancel && !result && !error) return null;
+  return (
+    <div className="grid gap-3">
+      {canCancel && (
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="outline" size="sm" className="w-fit" disabled={busy} data-testid="cancel-investigation">
+              <Prohibit aria-hidden /> Cancel
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogTitle>Cancel investigation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Running agent tasks are stopped and the investigation moves to CANCELLED. This cannot be undone.
+            </AlertDialogDescription>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep running</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void confirm()}>Cancel investigation</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+      {result && (
+        <p className="text-sm text-muted-foreground" data-testid="cancel-context">
+          {result.context_closed ? "Context closed" : "Context close pending"}
+        </p>
+      )}
+      {error && <ProblemAlert error={error} />}
+    </div>
   );
 }
 
@@ -150,12 +248,17 @@ function Tasks({ inv }: { inv: Investigation }) {
       ) : (
         <ul className="mt-3 divide-y divide-border rounded-md border border-border">
           {tasks.map((t) => (
-            <li key={t.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
+            <li key={t.id} data-testid="task-row" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5">
               <span className="min-w-0">
                 <span className="block truncate font-mono text-[13px]">{t.agent_id}</span>
                 <span className="block truncate text-xs text-muted-foreground">
                   {t.task_type}, attempt {t.attempt}
                 </span>
+                {t.status_reason && (
+                  <span className="block truncate font-mono text-xs text-muted-foreground" data-testid="task-reason">
+                    {t.status_reason}
+                  </span>
+                )}
               </span>
               <StatusBadge status={t.status} />
             </li>

@@ -20,6 +20,8 @@ const SCHEMAS = [
   "investigation-page",
   "timeline-event",
   "problem-details",
+  "investigation-cancel-response",
+  "task-cancel-response",
 ];
 
 const banner =

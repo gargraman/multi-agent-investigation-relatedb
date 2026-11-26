@@ -6,6 +6,7 @@
 import type {
   HealthLevel,
   Investigation,
+  InvestigationCancelResponse,
   InvestigationCreateRequest,
   InvestigationPage,
   ProblemDetails,
@@ -147,6 +148,10 @@ export const api = {
   },
   getInvestigation(id: string, signal?: AbortSignal): Promise<Investigation> {
     return request<Investigation>(`/investigations/${encodeURIComponent(id)}`, { signal });
+  },
+  /** 200 {id, status, context_closed}; 404 unknown; 409 `investigation_terminal` if already terminal. */
+  cancelInvestigation(id: string): Promise<InvestigationCancelResponse> {
+    return request<InvestigationCancelResponse>(`/investigations/${encodeURIComponent(id)}/cancel`, { method: "POST" });
   },
   async systemHealth(signal?: AbortSignal): Promise<SystemHealth> {
     return normalizeHealth(await request<unknown>("/system/health", { signal }));

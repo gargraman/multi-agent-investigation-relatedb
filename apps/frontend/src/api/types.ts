@@ -11,6 +11,7 @@ export type {
   OrchestratorTaskState,
   TaskView,
 } from "./generated/investigation";
+export type { InvestigationCancelResponse } from "./generated/investigation-cancel-response";
 export type { InvestigationCreateRequest } from "./generated/investigation-create-request";
 export type { InvestigationPage } from "./generated/investigation-page";
 export type { TimelineEvent, TimelineEventType } from "./generated/timeline-event";
