@@ -257,7 +257,9 @@ async def test_unreachable_agent_leaves_task_pending_with_a_timeline_note(
     assert note["reason"] == "agent_unreachable" and note["tries"] == 4
     assert note["current_state"] == "PENDING" and note["attempted_state"] == "DISPATCHED"
     submits = [s for s in exporter.get_finished_spans() if s.name == "a2a.submit"]
-    assert [s.attributes["nexus.dispatch.try"] for s in submits] == [1, 2, 3, 4]
+    tries = [s.attributes["nexus.dispatch.try"] for s in submits]
+    # the first dispatch's FR-003 loop, then one try per later tick (S3 §12 "retried each tick")
+    assert tries[:4] == [1, 2, 3, 4] and set(tries[4:]) <= {1}
     assert {s.attributes["nexus.dispatch.outcome"] for s in submits} == {"unavailable"}
 
 
@@ -280,14 +282,16 @@ async def test_restart_redispatch_is_idempotent_via_200_duplicate(make_app) -> N
 
         await wait_until(noted)
         assert (await detail(client, inv.id)).tasks[0].status == "PENDING"
-    assert agent.statuses() == [202, 200, 200, 200]
+    first = agent.statuses()
+    # the FR-003 loop (4 tries), then possibly a per-tick re-POST: all duplicates of the first
+    assert first[:4] == [202, 200, 200, 200] and set(first[4:]) <= {200}
 
     agent.lose_response = False
     app2 = make_app(fake, agent)
     async with running(app2) as client:
         done = await until_status(client, inv.id, TERMINAL)
         events = await timeline(client, inv.id)
-    assert agent.statuses() == [202, 200, 200, 200, 200]
+    assert agent.statuses()[: len(first)] == first and agent.statuses()[len(first) :] == [200]
     bodies = {b.model_dump_json() for _, b, _ in agent.submits}
     assert len(bodies) == 1  # byte-identical request, so no 409 content_conflict
     assert done.status == "PARTIAL" and done.tasks[0].attempt == 1

@@ -503,6 +503,10 @@ class Repository:
         )
         return [TaskRecord.from_row(r) for r in rows]
 
+    async def task_record(self, task_id: str) -> TaskRecord | None:
+        row = await self.db.fetchone("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        return TaskRecord.from_row(row) if row is not None else None
+
     async def tx_task_records(self, tx: Transaction, investigation_id: str) -> list[TaskRecord]:
         async with tx.conn.execute(
             "SELECT * FROM tasks WHERE investigation_id = ? ORDER BY created_at, id",

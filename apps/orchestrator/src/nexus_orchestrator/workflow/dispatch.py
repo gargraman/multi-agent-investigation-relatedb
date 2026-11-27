@@ -12,13 +12,20 @@ Agent answer                           Effect
 202/200 REJECTED                       PENDING → FAILED (``task_rejected``)
 409 content_conflict / stale_attempt   PENDING → FAILED (that code); not retried
 other 4xx (401/403/422 …)              PENDING → FAILED (``task_rejected``): a config error
-connect error / timeout / 5xx          stays PENDING; retried ``dispatch_max_retries`` (3) times
-                                       ``dispatch_backoff_seconds`` (2 s) apart
+connect error / timeout / 5xx          stays PENDING. First dispatch of an attempt: retried
+                                       ``dispatch_max_retries`` (3) times
+                                       ``dispatch_backoff_seconds`` (2 s) apart. Later ticks
+                                       (``single_shot``): one try, no loop
 retries exhausted                      stays PENDING, logged, ``transition.dropped`` timeline note
-                                       (``reason=agent_unreachable``). No watchdog in S2 (G13):
-                                       the investigation stays RUNNING until a restart re-POSTs it
-                                       or S3 deadlines land.
+                                       (``reason=agent_unreachable``), first dispatch only. The
+                                       driver re-POSTs it once per tick until its deadline, then
+                                       the deadline watcher times it out (S3 §12, FR-120)
 =====================================  ===========================================================
+
+**The row is re-read before every send** (and between retry tries): once it is no longer PENDING
+at this attempt (a fence, a cancel, a timeout) nothing more is sent. A late ack is written only if
+the row is still at this attempt (version-checked in the write transaction); a row that moved on
+gets a best-effort agent cancel instead (orphan).
 
 **Byte-identical resubmits.** The agent dedups on ``(task_id, attempt)`` and answers ``409
 content_conflict`` if the body hash differs (S2 FR-020). Every field of the ``TaskRequest`` is
@@ -134,12 +141,20 @@ class Dispatcher:
         self.agents = agents
         self.tracer = tracer
         self.is_leader = is_leader
+        self.backing_off = 0  # observability for tests: dispatches sleeping between retry tries
 
     async def dispatch(
-        self, inv: InvestigationRecord, task: TaskRecord, manifest: ScenarioManifest
+        self,
+        inv: InvestigationRecord,
+        task: TaskRecord,
+        manifest: ScenarioManifest,
+        *,
+        single_shot: bool = False,
     ) -> SubmitOutcome | None:
-        """Submit one PENDING task with the FR-003 retry policy. Returns the last outcome, or
-        ``None`` if nothing was sent (not leader, request impossible)."""
+        """Submit one PENDING task: the FR-003 retry loop, or one try when ``single_shot`` (the
+        per-tick re-POST after the first dispatch). Before each send the row is re-read and the
+        dispatch stops if it is no longer PENDING at ``task.attempt``. Returns the last outcome,
+        or ``None`` if nothing was sent (not leader, request impossible, row moved on)."""
         log_extra = {
             "investigation_id": inv.id,
             "task_id": task.id,
@@ -151,13 +166,25 @@ class Dispatcher:
         except DispatchImpossible:
             log.exception("cannot build TaskRequest; task stays PENDING", extra=log_extra)
             return None
-        attempts = 1 + self.settings.dispatch_max_retries
+        attempts = 1 if single_shot else 1 + self.settings.dispatch_max_retries
         parent = propagate.extract(stored_carrier(inv.trace_context_json))
         outcome: SubmitOutcome | None = None
         for n in range(1, attempts + 1):
             if not self.is_leader():
                 log.warning("not the leader; dispatch skipped", extra=log_extra)
                 return outcome
+            current = await self.repo.task_record(task.id)
+            if (
+                current is None
+                or current.status is not OrchestratorTaskState.PENDING
+                or current.attempt != task.attempt
+            ):
+                log.info(
+                    "task no longer pending at this attempt; dispatch stopped",
+                    extra={**log_extra, "status": current.status.value if current else None},
+                )
+                return outcome
+            task = current  # the current version for the ack / failure write
             outcome = await self._submit_once(request, task, parent, n)
             if outcome.kind is SubmitKind.ACKED:
                 await self._acked(task, outcome)
@@ -170,12 +197,24 @@ class Dispatcher:
                 )
                 await self._fail(task, code)
                 return outcome
+            if single_shot:
+                # Once per tick while the agent is unreachable: no timeline note (the first
+                # dispatch wrote one), and debug only, not a warning every 2 s.
+                log.debug(
+                    "re-POST failed; task stays PENDING",
+                    extra={**log_extra, "detail": outcome.detail},
+                )
+                return outcome
             log.warning(
                 "dispatch failed; task stays PENDING",
                 extra={**log_extra, "detail": outcome.detail, "try": n, "of": attempts},
             )
             if n < attempts:
-                await self.clock.sleep(self.settings.dispatch_backoff_seconds)
+                self.backing_off += 1
+                try:
+                    await self.clock.sleep(self.settings.dispatch_backoff_seconds)
+                finally:
+                    self.backing_off -= 1
         await self._unreachable(task, attempts, outcome)
         return outcome
 
@@ -202,9 +241,25 @@ class Dispatcher:
             return
         now = self.clock.now()
         async with self.db.transaction() as tx:
-            applied = await self.repo.transition_task(
-                tx, task, OrchestratorTaskState.DISPATCHED, now=now, fields={"acked_at": iso(now)}
+            row = await tx.fetchone("SELECT attempt FROM tasks WHERE id = ?", (task.id,))
+            stale = row is None or row["attempt"] != task.attempt
+            if not stale:
+                applied = await self.repo.transition_task(
+                    tx,
+                    task,
+                    OrchestratorTaskState.DISPATCHED,
+                    now=now,
+                    fields={"acked_at": iso(now)},
+                )
+        if stale:
+            # A later attempt owns the row: this ack is for an attempt that is over. No cancel
+            # (the agent cancel is by task id and would stop the new attempt too); the agent
+            # refuses the old attempt's commit as stale (FR-122).
+            log.warning(
+                "ack for an attempt that is over; ignored",
+                extra={"task_id": task.id, "attempt": task.attempt},
             )
+            return
         if applied is Applied.DROPPED:
             # The row moved on while the submit was in flight (cancelled by the fence, or timed
             # out), so nobody else knows the agent now holds this task: stop it ourselves.

@@ -89,7 +89,12 @@ class Session:
         that is in flight (DB writes, HTTP calls to the doubles) has finished."""
         clock, rt = self.chaos.clock, runtime(self.app)
         end = time.monotonic() + 5.0
-        while clock.pending() < 1 + len(rt.poller.active()):
+        # Dispatch jobs run off the tick: also wait until each one is done or sleeping between
+        # retry tries (those sleepers are on the clock too), and no driver is mid-tick.
+        while (
+            clock.pending() < 1 + len(rt.poller.active()) + rt.poller.dispatcher.backing_off
+            or not rt.poller.quiescent()
+        ):
             if time.monotonic() > end:
                 raise AssertionError("drivers did not park")
             await asyncio.sleep(0.002)

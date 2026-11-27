@@ -10,19 +10,25 @@ Each tick, only while this process **holds the leader lock** (ADR-005 D1):
    every open task, and the driver exits. Nothing below runs on that tick.
 1. Time out every PENDING/DISPATCHED/RUNNING task past its deadline (FR-120, ``deadlines.py``):
    → TIMED_OUT (version guarded), then a best-effort agent cancel for DISPATCHED/RUNNING ones.
-2. On the driver's first leader tick, dispatch every PENDING task (same ``attempt``; the agent's
-   ``(task_id, attempt)`` dedup makes a resume re-POST safe, ADR-008 F2).
-3. Poll every DISPATCHED/RUNNING task through the uninstrumented client and map the result with
+2. Re-dispatch (FR-121): a retry-eligible task whose wait window is open and whose agent's
+   ``/readyz`` is green goes back to PENDING as attempt 2.
+3. Dispatch every PENDING task (any attempt) whose own deadline has not passed (S3 §12: "retried
+   each tick until its deadline"). The first dispatch of a ``(task, attempt)`` by this driver runs
+   the FR-003 retry loop; every later tick sends **one** try. Dispatches run as background jobs
+   (one per task, never two at once), so an agent that is down or hangs cannot hold the tick and
+   delay the deadline watcher for the other tasks (NFR-101). The row is re-read before each send;
+   the agent's ``(task_id, attempt)`` dedup makes a re-POST safe (ADR-008 F2).
+4. Poll every DISPATCHED/RUNNING task through the uninstrumented client and map the result with
    ``status_mapping`` (the only agent↔orchestrator crossing, §8.2). A poll that changes nothing
    writes nothing: no event and no span per poll (F9). An agent ``FAILED(deadline_exceeded)`` at
    attempt 1 is recorded as TIMED_OUT, the same as an orchestrator timeout (FR-121b).
-4. When every task row is terminal, apply the S2 terminal rule (``workflow/terminal.py``) and
+5. When every task row is terminal, apply the S2 terminal rule (``workflow/terminal.py``) and
    exit.
 
-A **resumed** driver (startup sweep, FR-127) runs its first tick as 2, 3, then 0, 1 and the
-re-dispatch: what the agent finished during the outage is kept, and only a task with no terminal
-answer is timed out. Past the investigation deadline nothing is re-POSTed. After each COMPLETED
-task the analysis budget is checked and logged only (FR-128, ``budget.py``).
+A **resumed** driver (startup sweep, FR-127) runs its first tick as 3, 4, then 0, 1, 2: what the
+agent finished during the outage is kept, and only a task with no terminal answer is timed out.
+Past the investigation deadline nothing is re-POSTed, nor is a PENDING task past its own deadline.
+After each COMPLETED task the analysis budget is checked and logged only (FR-128, ``budget.py``).
 
 Then sleep ``poll_interval_seconds`` ± ``poll_jitter_ratio`` (2 s ± 20 %).
 
@@ -78,6 +84,10 @@ from nexus_orchestrator.workflow.transitions import FIRST_ATTEMPT
 log = logging.getLogger(__name__)
 
 POLLED_STATES = frozenset({OrchestratorTaskState.DISPATCHED, OrchestratorTaskState.RUNNING})
+# A tick waits for its dispatch jobs at most this share of the poll interval (0.5 s at 2 s), so
+# a fast ack is polled in the same tick, while a slow or hung submit costs the other tasks at
+# most that much before the job goes on alone (NFR-101: one tick + this ≤ 3 s).
+DISPATCH_WAIT_RATIO = 0.25
 
 
 def skipped_agents(manifest: ScenarioManifest | None, tasks: list[TaskRecord]) -> list[AgentId]:
@@ -140,6 +150,10 @@ class Poller:
         self._no_reservation_logged: set[str] = set()  # log "nothing to retry with" once per task
         self.polls = 0  # observability for tests: number of GET /v1/tasks issued
         self._stopped = False
+        self._inflight: dict[str, asyncio.Task[None]] = {}  # task id -> its dispatch job
+        # Test observability: per driver "tick" | "wait" (on its dispatch jobs) | "sleep".
+        self._phase: dict[str, str] = {}
+        self._waiting_on: dict[str, list[asyncio.Task[None]]] = {}
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -152,23 +166,48 @@ class Poller:
         current = self._drivers.get(investigation_id)
         if current is not None and not current.done():
             return
-        self._drivers[investigation_id] = asyncio.create_task(
+        driver = asyncio.create_task(
             self._drive(investigation_id, resumed=resumed), name=f"driver-{investigation_id}"
         )
+        self._drivers[investigation_id] = driver
+
+        def forget(_: asyncio.Task[None]) -> None:
+            if self._drivers.get(investigation_id) is driver:
+                self._phase.pop(investigation_id, None)
+
+        driver.add_done_callback(forget)
 
     def active(self) -> set[str]:
         return {i for i, t in self._drivers.items() if not t.done()}
 
+    def dispatches_busy(self) -> int:
+        """Dispatch jobs that are running and not sleeping between retry tries (for tests)."""
+        running = sum(1 for j in self._inflight.values() if not j.done())
+        return running - self.dispatcher.backing_off
+
+    def quiescent(self) -> bool:
+        """For tests: no driver is mid-tick, none is about to resume from its dispatch wait, and
+        no dispatch job is running (one sleeping between retry tries is fine). Pair it with the
+        clock's sleeper count: a driver woken by ``advance`` still reads as asleep here."""
+        for inv in self.active():
+            phase = self._phase.get(inv, "tick")
+            if phase == "tick":
+                return False
+            if phase == "wait" and all(j.done() for j in self._waiting_on.get(inv, [])):
+                return False
+        return self.dispatches_busy() == 0
+
     async def stop(self) -> None:
         """Graceful shutdown (ADR-005 D5): cancel drivers, change no state."""
         self._stopped = True
-        tasks = list(self._drivers.values())
+        tasks = [*self._drivers.values(), *self._inflight.values()]
         for t in tasks:
             t.cancel()
         for t in tasks:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         self._drivers.clear()
+        self._inflight.clear()
 
     def _sleep_seconds(self) -> float:
         base = self.settings.poll_interval_seconds
@@ -179,9 +218,10 @@ class Poller:
 
     async def _drive(self, investigation_id: str, *, resumed: bool = False) -> None:
         manifest: ScenarioManifest | None = None
-        dispatched = False
+        first_sent: set[tuple[str, int]] = set()  # (task, attempt) whose first dispatch started
         poll_first = resumed  # FR-127: the first tick polls before it applies any deadline
         while True:
+            self._phase[investigation_id] = "tick"
             try:
                 if self.is_leader():
                     inv = await self.repo.investigation_record(investigation_id)
@@ -196,15 +236,17 @@ class Poller:
                             )
                     tasks = await self.repo.task_records(investigation_id)
                     # Tick order: (1) investigation deadline (FR-123), (2) task deadlines,
-                    # (3) re-dispatch (FR-121), then dispatch, poll, finish. A resumed driver's
+                    # (3) re-dispatch (FR-121), then dispatch (every PENDING task with time
+                    # left, as background jobs), poll, finish. A resumed driver's
                     # first tick is dispatch, poll, then (1)-(3): what an agent finished while we
                     # were down is kept, and only a task with no terminal answer is timed out.
                     polled_first = False
                     if poll_first:
                         if manifest is not None and self.clock.now() < inv.deadline:
                             # Past the investigation deadline nothing is re-POSTed (FR-123).
-                            dispatched = await self._dispatch_pending(
-                                inv, tasks, manifest, dispatched
+                            await self._await_dispatches(
+                                investigation_id,
+                                await self._dispatch_pending(inv, tasks, manifest, first_sent),
                             )
                         await self._poll_open(inv, investigation_id)
                         tasks = await self.repo.task_records(investigation_id)
@@ -224,7 +266,10 @@ class Poller:
                         await asyncio.gather(*(self._redispatch(t, inv, manifest) for t in retry))
                         tasks = await self.repo.task_records(investigation_id)
                     if manifest is not None:
-                        dispatched = await self._dispatch_pending(inv, tasks, manifest, dispatched)
+                        await self._await_dispatches(
+                            investigation_id,
+                            await self._dispatch_pending(inv, tasks, manifest, first_sent),
+                        )
                     if not polled_first:
                         await self._poll_open(inv, investigation_id)
                     if await self._maybe_finish(investigation_id, manifest):
@@ -233,6 +278,9 @@ class Poller:
                 raise
             except Exception:
                 log.exception("driver tick failed", extra={"investigation_id": investigation_id})
+            finally:
+                self._waiting_on.pop(investigation_id, None)
+            self._phase[investigation_id] = "sleep"
             await self.clock.sleep(self._sleep_seconds())
 
     async def _dispatch_pending(
@@ -240,19 +288,72 @@ class Poller:
         inv: InvestigationRecord,
         tasks: list[TaskRecord],
         manifest: ScenarioManifest,
-        dispatched: bool,
-    ) -> bool:
-        """POST the PENDING tasks. First leader tick: every one (a resume re-POSTs, F2). After
-        that only a re-dispatched one (attempt > 1): a first-attempt task the agent could not be
-        reached for stays PENDING until its deadline (G13). Returns the new ``dispatched``."""
-        pending = [
-            t
-            for t in tasks
-            if t.status is OrchestratorTaskState.PENDING
-            and (not dispatched or t.attempt > FIRST_ATTEMPT)
-        ]
-        await asyncio.gather(*(self.dispatcher.dispatch(inv, t, manifest) for t in pending))
-        return dispatched or self.is_leader()  # lost it mid-way: retry
+        first_sent: set[tuple[str, int]],
+    ) -> list[asyncio.Task[None]]:
+        """Start a dispatch job for every PENDING task (any attempt) that still has time left and
+        has no job in flight. The first dispatch of a ``(task, attempt)`` runs the FR-003 retry
+        loop; later ticks send one try. A task at or past its deadline is left to the deadline
+        watcher (FR-120). Returns the jobs started (see ``_await_dispatches``)."""
+        now = self.clock.now()
+        started: list[asyncio.Task[None]] = []
+        for t in tasks:
+            if t.status is not OrchestratorTaskState.PENDING or now >= t.deadline:
+                continue
+            job = self._inflight.get(t.id)
+            if job is not None and not job.done():
+                continue  # one dispatch per task at a time; the next tick looks again
+            key = (t.id, t.attempt)
+            single_shot = key in first_sent
+            first_sent.add(key)
+            job = asyncio.create_task(
+                self._dispatch_job(inv, t, manifest, single_shot), name=f"dispatch-{t.id}"
+            )
+            self._inflight[t.id] = job
+            job.add_done_callback(lambda done, tid=t.id: self._forget_job(tid, done))
+            started.append(job)
+        return started
+
+    async def _await_dispatches(
+        self, investigation_id: str, jobs: list[asyncio.Task[None]]
+    ) -> None:
+        """Wait for this tick's dispatch jobs, at most ``DISPATCH_WAIT_RATIO`` of a poll interval
+        on the clock. A job still running after that (a retry loop, a hung submit) carries on by
+        itself; the tick goes on to poll and later ticks skip its task until it is done."""
+        if not jobs:
+            return
+        budget = self.settings.poll_interval_seconds * DISPATCH_WAIT_RATIO
+        timer = asyncio.ensure_future(self.clock.sleep(budget))
+        all_done = asyncio.ensure_future(asyncio.wait(jobs))  # cancelling it leaves the jobs
+        await asyncio.sleep(0)  # let the timer register on the clock before we say "wait"
+        self._waiting_on[investigation_id] = jobs
+        self._phase[investigation_id] = "wait"
+        try:
+            await asyncio.wait({timer, all_done}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            self._phase[investigation_id] = "tick"
+            self._waiting_on.pop(investigation_id, None)
+            for waiter in (timer, all_done):
+                waiter.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await waiter
+
+    def _forget_job(self, task_id: str, job: asyncio.Task[None]) -> None:
+        if self._inflight.get(task_id) is job:
+            del self._inflight[task_id]
+
+    async def _dispatch_job(
+        self,
+        inv: InvestigationRecord,
+        task: TaskRecord,
+        manifest: ScenarioManifest,
+        single_shot: bool,
+    ) -> None:
+        try:
+            await self.dispatcher.dispatch(inv, task, manifest, single_shot=single_shot)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("dispatch failed", extra={"task_id": task.id})
 
     async def _poll_open(self, inv: InvestigationRecord, investigation_id: str) -> None:
         """One poll of every DISPATCHED/RUNNING task (re-read: the dispatch step moved some)."""
