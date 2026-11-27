@@ -24,8 +24,10 @@ retries exhausted                      stays PENDING, logged, ``transition.dropp
 
 **The row is re-read before every send** (and between retry tries): once it is no longer PENDING
 at this attempt (a fence, a cancel, a timeout) nothing more is sent. A late ack is written only if
-the row is still at this attempt (version-checked in the write transaction); a row that moved on
-gets a best-effort agent cancel instead (orphan).
+the row is still at this attempt (version-checked in the write transaction). A row that moved on
+at the same attempt (fenced, timed out) gets a best-effort agent cancel instead (orphan). A row
+that moved on to a later attempt ignores the late answer, ack or refusal alike, and sends no
+cancel: the agent cancel is by task id and would stop the new attempt too.
 
 **Byte-identical resubmits.** The agent dedups on ``(task_id, attempt)`` and answers ``409
 content_conflict`` if the body hash differs (S2 FR-020). Every field of the ``TaskRequest`` is
@@ -276,7 +278,17 @@ class Dispatcher:
             log.warning("orphan cancel failed", extra={"task_id": task.id}, exc_info=True)
 
     async def _fail(self, task: TaskRecord, code: ErrorCode) -> None:
+        """Record the agent's refusal (4xx / REJECTED) of ``task.attempt``. A refusal is about the
+        attempt that was sent: once a later attempt owns the row it is ignored, or a stale reply
+        would fail an attempt that was never sent (background dispatch makes that overlap real)."""
         async with self.db.transaction() as tx:
+            row = await tx.fetchone("SELECT attempt FROM tasks WHERE id = ?", (task.id,))
+            if row is None or row["attempt"] != task.attempt:
+                log.warning(
+                    "refusal for an attempt that is over; ignored",
+                    extra={"task_id": task.id, "attempt": task.attempt, "code": code.value},
+                )
+                return
             await self.repo.transition_task(
                 tx,
                 task,
@@ -290,7 +302,7 @@ class Dispatcher:
         self, task: TaskRecord, attempts: int, outcome: SubmitOutcome | None
     ) -> None:
         log.error(
-            "agent unreachable after all dispatch retries; task stays PENDING (S2 G13)",
+            "agent unreachable after all dispatch retries; task stays PENDING until its deadline",
             extra={"task_id": task.id, "agent_id": task.agent_id.value, "tries": attempts},
         )
         async with self.db.transaction() as tx:

@@ -216,3 +216,58 @@ async def test_ack_for_an_attempt_that_is_over_is_ignored(chaos_app) -> None:
 
     assert (after.attempt, after.status) == (2, T.PENDING)
     assert chaos_app.geo.cancels == []
+
+
+async def test_late_rejection_for_an_attempt_that_is_over_is_ignored(chaos_app) -> None:
+    """Attempt 1's submit is in flight when the row moves on to attempt 2 (PENDING again); the
+    agent then answers REJECTED. That verdict is about attempt 1: attempt 2 stays PENDING and is
+    not failed without ever being sent."""
+    from nexus_contracts.a2a.task import AgentTaskStatus
+
+    gate = asyncio.Event()
+    chaos_app.geo.submit_gate = gate
+    chaos_app.geo.submit_status = AgentTaskStatus.REJECTED
+    async with chaos_app.session() as s:
+        inv_id = await s.create()
+        rt = runtime(s.app)
+
+        async def entered() -> bool:
+            return chaos_app.geo.submit_entered == 1
+
+        await wait_until(entered)
+        geo = (await s.tasks(inv_id))[GEO]
+        async with rt.db.transaction() as tx:  # as a timeout + re-dispatch would have left it
+            await tx.execute(
+                "UPDATE tasks SET attempt = 2, version = version + 2 WHERE id = ?", (geo.id,)
+            )
+        gate.set()
+
+        async def job_done() -> bool:
+            return rt.poller.dispatches_busy() == 0 and len(chaos_app.geo.statuses()) >= 1
+
+        await wait_until(job_done)
+        await asyncio.sleep(0.05)
+        after = (await s.tasks(inv_id))[GEO]
+
+    assert (after.attempt, after.status) == (2, T.PENDING)
+
+
+async def test_refusal_write_for_an_attempt_that_is_over_is_dropped(chaos_app) -> None:
+    """The refusal write itself (4xx / REJECTED → FAILED) carries the attempt it is about: a
+    snapshot of attempt 1 cannot fail the row once attempt 2 owns it."""
+    from nexus_contracts.api.errors import ErrorCode
+
+    chaos_app.geo.submit_gate = asyncio.Event()  # keep the real dispatch out of the way
+    async with chaos_app.session() as s:
+        inv_id = await s.create()
+        rt = runtime(s.app)
+        stale = (await s.tasks(inv_id))[GEO]
+        async with rt.db.transaction() as tx:
+            await tx.execute(
+                "UPDATE tasks SET attempt = 2, version = version + 2 WHERE id = ?", (stale.id,)
+            )
+        await rt.poller.dispatcher._fail(stale, ErrorCode.TASK_REJECTED)
+        after = (await s.tasks(inv_id))[GEO]
+        chaos_app.geo.submit_gate.set()
+
+    assert (after.attempt, after.status) == (2, T.PENDING)
