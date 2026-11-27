@@ -77,11 +77,12 @@ E2E_BASE_URL ?= http://127.0.0.1:$(or $(NEXUS_UI_PORT),3000)
 # scripts/e2e_replay.py over the 3 scenarios, prints an agent-log check (no OpenAI provider calls,
 # no replay misses), and ALWAYS restores the agents to the default mode afterwards (trap on exit),
 # so `make up` semantics are unchanged. Reads no secrets beyond what compose already uses.
-e2e-replay: .env ## (S3a) agents in replay mode, 3-scenario E2E, agents restored to live after
+e2e-replay: .env ## (S3a) agents in replay mode, 3-scenario E2E; restored in replay unless NEXUS_LLM_MODE=live
 	@set -e; \
-	restore() { echo "--- restoring $(REPLAY_AGENTS) to the default NEXUS_LLM_MODE (live)"; \
-	  $(COMPOSE) up -d --no-deps --force-recreate --wait $(REPLAY_AGENTS) >/dev/null 2>&1 \
-	    || echo "WARNING: could not restore live mode; run: make up" >&2; }; \
+	restore() { mode="$${NEXUS_LLM_MODE:-replay}"; \
+	  echo "--- restoring $(REPLAY_AGENTS) with NEXUS_LLM_MODE=$$mode"; \
+	  NEXUS_LLM_MODE="$$mode" $(COMPOSE) up -d --no-deps --force-recreate --wait $(REPLAY_AGENTS) >/dev/null 2>&1 \
+	    || echo "WARNING: could not restore $(REPLAY_AGENTS); run: make up" >&2; }; \
 	trap restore EXIT; \
 	echo "--- restarting $(REPLAY_AGENTS) with NEXUS_LLM_MODE=replay"; \
 	NEXUS_LLM_MODE=replay $(COMPOSE) up -d --no-deps --force-recreate --wait $(REPLAY_AGENTS); \

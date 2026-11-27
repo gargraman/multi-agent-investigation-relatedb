@@ -21,9 +21,11 @@
 #
 # Safety: every docker call is `docker compose -p nexus ...` on this repo's compose files, never a
 # bare container name. Reads no secrets: .env is only passed to compose via --env-file, and the
-# only value printed back from a container is NEXUS_REPLAY_LATENCY_MS. On exit the stack is
-# re-applied from compose.yaml alone (agents back to the default NEXUS_LLM_MODE, like
-# `make e2e-replay`); set CHAOS_NO_RESTORE=1 to leave the chaos configuration running.
+# only value printed back from a container is NEXUS_REPLAY_LATENCY_MS. On exit (pass, fail or
+# Ctrl-C) every non-terminal investigation is cancelled through the API first, then the stack is
+# re-applied from compose.yaml alone with NEXUS_LLM_MODE="${NEXUS_LLM_MODE:-replay}": it never
+# flips the agents to live unless the caller exported NEXUS_LLM_MODE=live. Set CHAOS_NO_RESTORE=1
+# to leave the chaos configuration running.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -285,10 +287,34 @@ PY
 }
 
 # --- driver ------------------------------------------------------------------------------------
+cancel_open() {   # best effort: cancel every non-terminal investigation (404/409 are fine)
+  pyrun <<'PY' || echo "WARNING: could not list/cancel open investigations" >&2
+cursor, ids = None, []
+for _ in range(50):
+    s, b = call("GET", "/api/v1/investigations?limit=100" + (f"&cursor={cursor}" if cursor else ""), timeout=5)
+    if s != 200:
+        sys.exit(f"list returned {s}")
+    ids += [i["id"] for i in b["items"] if i["status"] not in TERMINAL]
+    cursor = b.get("next_cursor")
+    if not cursor:
+        break
+for i in ids:
+    try:
+        s, _ = call("POST", f"/api/v1/investigations/{i}/cancel", timeout=10)
+    except (OSError, ValueError) as e:
+        s = type(e).__name__
+    print(f"  cancel {i}: {s}")
+print(f"  {len(ids)} open investigation(s) cancelled before restore")
+PY
+}
+
 restore() {
   [ "${CHAOS_NO_RESTORE:-0}" = 1 ] && { echo "--- CHAOS_NO_RESTORE=1: chaos configuration left running"; return; }
-  echo "--- restoring the stack from compose.yaml alone (default NEXUS_LLM_MODE, 180 s deadline)"
-  "${BASE_COMPOSE[@]}" up -d --wait >/dev/null 2>&1 \
+  echo "--- cancelling open investigations before the restore"
+  cancel_open
+  local mode="${NEXUS_LLM_MODE:-replay}"
+  echo "--- restoring the stack from compose.yaml alone (NEXUS_LLM_MODE=${mode}, 180 s deadline)"
+  NEXUS_LLM_MODE="$mode" "${BASE_COMPOSE[@]}" up -d --wait >/dev/null 2>&1 \
     || echo "WARNING: could not restore the default configuration; run: make up" >&2
 }
 

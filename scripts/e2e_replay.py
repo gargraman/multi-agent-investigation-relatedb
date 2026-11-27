@@ -19,6 +19,10 @@ so the timeline payloads are the closest reachable surface. Both agents screen `
 (``nodes/geoint-node/tests/test_pipeline.py::test_injection_cannot_move_placements_or_reach_stored_summaries``,
 ``nodes/sigint-node/tests/test_pipeline.py::test_tripwires_never_reach_task_summary_or_warnings``).
 
+An investigation this script gives up on (poll timeout, an error or Ctrl-C while polling) is
+cancelled best effort (``POST /api/v1/investigations/{id}/cancel``; 404/409 ignored), so a run
+nobody watches does not keep the agents, or in live mode the model, busy.
+
 A failure is per scenario: an HTTP error, a malformed body or a missing key fails that scenario
 and the remaining ones still run.
 
@@ -86,6 +90,20 @@ def read_timeline(client: httpx.Client, inv_id: str) -> list[dict]:
     raise RuntimeError(f"timeline still has a next_cursor after {MAX_TIMELINE_PAGES} pages")
 
 
+def cancel_quietly(client: httpx.Client, inv_id: str) -> None:
+    """Best effort: cancel an investigation we stopped watching. 404 (gone) and 409 (already
+    terminal) are fine; any other answer or a transport error is only reported."""
+    try:
+        resp = client.post(f"/api/v1/investigations/{inv_id}/cancel")
+    except httpx.HTTPError as exc:
+        print(f"  WARNING: cancel of {inv_id} failed: {type(exc).__name__}", flush=True)
+        return
+    if resp.status_code in (200, 404, 409):
+        print(f"  cancelled {inv_id} (HTTP {resp.status_code})", flush=True)
+    else:
+        print(f"  WARNING: cancel of {inv_id} returned {resp.status_code}", flush=True)
+
+
 def run_scenario(client: httpx.Client, scenario: str, timeout_s: float) -> list[str]:
     """All violations for one scenario (empty = pass)."""
     oracle = load_manifest(REPO_ROOT / "data" / "scenarios" / scenario).oracle
@@ -96,17 +114,25 @@ def run_scenario(client: httpx.Client, scenario: str, timeout_s: float) -> list[
     print(f"  {scenario}: created {inv_id}", flush=True)
 
     end = time.monotonic() + timeout_s
-    while True:
-        resp = client.get(f"/api/v1/investigations/{inv_id}")
-        if not resp.is_success:  # fail fast: a 404/5xx will not turn into a terminal status
-            return [f"{inv_id} poll returned {resp.status_code}: {resp.text[:300]}"]
-        inv = Investigation.model_validate(resp.json())
-        if inv.status in TERMINAL:
-            break
-        if time.monotonic() > end:
-            states = {t.agent_id.value: t.status for t in inv.tasks}
-            return [f"{inv_id} not terminal after {timeout_s:.0f}s: {inv.status} tasks={states}"]
-        time.sleep(POLL_S)
+    try:
+        while True:
+            resp = client.get(f"/api/v1/investigations/{inv_id}")
+            if not resp.is_success:  # fail fast: a 404/5xx will not turn into a terminal status
+                cancel_quietly(client, inv_id)
+                return [f"{inv_id} poll returned {resp.status_code}: {resp.text[:300]}"]
+            inv = Investigation.model_validate(resp.json())
+            if inv.status in TERMINAL:
+                break
+            if time.monotonic() > end:
+                cancel_quietly(client, inv_id)
+                states = {t.agent_id.value: t.status for t in inv.tasks}
+                return [
+                    f"{inv_id} not terminal after {timeout_s:.0f}s: {inv.status} tasks={states}"
+                ]
+            time.sleep(POLL_S)
+    except BaseException:  # an error or Ctrl-C while we wait: do not leave the run going
+        cancel_quietly(client, inv_id)
+        raise
 
     violations: list[str] = []
     reason = inv.status_reason.value if inv.status_reason else None
