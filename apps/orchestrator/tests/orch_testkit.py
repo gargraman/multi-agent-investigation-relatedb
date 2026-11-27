@@ -212,6 +212,8 @@ class FakeAgent:
       alone (the orchestrator has already moved on, which is what the tests look at).
       ``submit_gate`` (an ``asyncio.Event``) holds ``POST /v1/tasks`` until set (a submit that is
       in flight while something else happens); ``log`` records submit/cancel landing order.
+      ``poll_gate`` / ``ready_gate`` do the same for ``GET /v1/tasks/{id}`` and ``GET /readyz``
+      (a frozen agent that accepts the connection and never answers).
       ``hang_cancel = True`` makes it never answer. ``journal``, when set, gets
       ``"cancel:<task_id>"`` appended per call (share one list with ``FakeContextService``).
     - ``GET /readyz``: 200, or 503 while ``ready = False`` (the re-dispatch gate, FR-121).
@@ -261,6 +263,10 @@ class FakeAgent:
         self.log: list[str] = []  # "submit:<id>" / "cancel:<id>", in the order they landed
         self.submit_gate: asyncio.Event | None = None  # holds POST /v1/tasks until set
         self.submit_entered = 0  # submits that reached the agent (before the gate)
+        self.poll_gate: asyncio.Event | None = None  # holds GET /v1/tasks/{id} until set
+        self.poll_entered = 0
+        self.ready_gate: asyncio.Event | None = None  # holds GET /readyz until set
+        self.ready_entered = 0
         self.card_reads = 0
         self.restart_pending = False
         self.answer_clock: FakeClock | None = None
@@ -338,6 +344,9 @@ class FakeAgent:
         @app.get("/readyz")
         async def readyz() -> JSONResponse:
             fake.readyz_hits += 1
+            if fake.ready_gate is not None:
+                fake.ready_entered += 1
+                await fake.ready_gate.wait()
             code = 200 if fake.ready else 503
             return JSONResponse({"status": "ready" if fake.ready else "starting"}, status_code=code)
 
@@ -399,6 +408,9 @@ class FakeAgent:
             if request.headers.get("authorization") != f"Bearer {TOKEN}":
                 return JSONResponse({"title": "Unauthorized", "status": 401}, status_code=401)
             fake.polls.append(task_id)
+            if fake.poll_gate is not None:
+                fake.poll_entered += 1
+                await fake.poll_gate.wait()
             task = fake.tasks.get(task_id)
             if task is None:
                 return JSONResponse({"title": "Not Found", "status": 404}, status_code=404)

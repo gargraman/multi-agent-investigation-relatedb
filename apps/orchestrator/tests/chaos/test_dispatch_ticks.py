@@ -170,7 +170,10 @@ async def test_hanging_submit_does_not_hold_the_other_tasks_deadline(chaos_app) 
         finally:
             gate.set()
 
-    assert chaos_app.geo.submit_entered >= 1 and geo.status is T.PENDING  # still hanging
+    # Still hanging: attempt 1 was never acknowledged, and no attempt 2 went out while its
+    # submit was in flight (a re-dispatch waits for the task's job to end).
+    assert chaos_app.geo.submit_entered == 1
+    assert geo.status in {T.PENDING, T.TIMED_OUT}
     assert seen_at is not None, "SIGINT's deadline was never applied"
     assert seen_at - deadline <= timedelta(seconds=chaos_app.poll)
 
