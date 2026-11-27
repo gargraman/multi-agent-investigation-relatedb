@@ -450,7 +450,7 @@ Rules, applied to `statement` and `reasoning_summary`:
   - 409 problem with `code=investigation_terminal` and the current status in `detail` when the investigation is already terminal, or when `Fence.end` returns `applied=False`.
   - Span `workflow.cancel` around `Fence.end(id, CANCELLED, None, task_reason=None)`. No new ErrorCode: the CANCELLED state is the reason.
   - Cancel works from CREATED and RUNNING.
-  - After a cancel the driver stops (`poller.stop_one(id)`), and the creation retrier drops the id.
+  - After a cancel the route does not stop the driver: the driver sees the investigation is no longer RUNNING and exits on its next tick (as shipped; `stop_one` was dropped because cancelling a driver mid-submit orphaned the agent task). The creation retrier drops the id.
 
 - [ ] **Step 1: Write the failing tests:**
   - `test_cancel_running_returns_cancelled_context_closed_true`: the tasks are CANCELLED, the fake agents saw cancels, and the response is `{"status":"CANCELLED","context_closed":true}`.
@@ -659,7 +659,7 @@ Rules, applied to `statement` and `reasoning_summary`:
 - Test: `context-service/tests/test_findings_batch_caller.py` (extend)
 
 - [ ] **Step 1: Write the failing tests:**
-  - `test_cross_caller_writes_denied_audit_row`: one `AuditEvent` with outcome `DENIED`, action `findings.batch` and the caller, and no finding ids.
+  - `test_cross_caller_writes_denied_audit_row`: one `AuditEvent` with outcome `DENIED`, action `findings.submit` and the caller, and no finding ids.
   - `test_cross_caller_to_other_investigation_403`.
   - `test_cross_caller_to_closed_investigation`: 409 `investigation_cancelled` takes precedence over 403 and does not reveal ownership.
   - `test_403_detail_is_generic`: the detail equals `"forbidden"` and does not contain the task_id.
