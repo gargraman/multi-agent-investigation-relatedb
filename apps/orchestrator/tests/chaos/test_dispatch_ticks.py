@@ -274,3 +274,26 @@ async def test_refusal_write_for_an_attempt_that_is_over_is_dropped(chaos_app) -
         chaos_app.geo.submit_gate.set()
 
     assert (after.attempt, after.status) == (2, T.PENDING)
+
+
+async def test_poll_or_timeout_write_for_an_attempt_that_is_over_is_dropped(chaos_app) -> None:
+    """Same for the driver's own writes (a poll result, a timeout): a snapshot of attempt 1 (a poll
+    job that outlived its leader, say) cannot move the row once attempt 2 owns it (FR-122)."""
+    from nexus_contracts.a2a.status_mapping import TaskStateUpdate
+    from nexus_contracts.api.errors import ErrorCode
+    from nexus_orchestrator.state.repository import Applied
+
+    chaos_app.geo.submit_gate = asyncio.Event()  # keep the real dispatch out of the way
+    async with chaos_app.session() as s:
+        inv_id = await s.create()
+        rt = runtime(s.app)
+        stale = (await s.tasks(inv_id))[GEO]
+        async with rt.db.transaction() as tx:
+            await tx.execute("UPDATE tasks SET attempt = 2 WHERE id = ?", (stale.id,))
+        update = TaskStateUpdate(T.TIMED_OUT, ErrorCode.DEADLINE_EXCEEDED)
+        applied = await rt.poller._record(stale, update, None, None)
+        after = (await s.tasks(inv_id))[GEO]
+        chaos_app.geo.submit_gate.set()
+
+    assert applied is Applied.DROPPED
+    assert (after.attempt, after.status) == (2, T.PENDING)

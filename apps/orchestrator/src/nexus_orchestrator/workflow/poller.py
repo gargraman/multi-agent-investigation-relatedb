@@ -371,7 +371,8 @@ class Poller:
     ) -> list[asyncio.Task[None]]:
         """A re-dispatch job (``/readyz`` probe, then the write) per retry-eligible task that has
         no job in flight and whose post-timeout cancel has settled. Its PENDING attempt 2 is
-        POSTed by the next tick's dispatch step."""
+        POSTed by this tick's dispatch step if the job finishes within the tick's wait, else by a
+        later tick's."""
         started = []
         for t in retry:
             cancel = self._cancels.get(t.id)
@@ -694,6 +695,15 @@ class Poller:
         with self.tracer.start_as_current_span("task.transition", context=parent, attributes=attrs):
             now = self.clock.now()
             async with self.db.transaction() as tx:
+                # A poll result or timeout is about ``task.attempt``: once a later attempt owns
+                # the row (a poll job that outlived its leader, say) it must not move it (FR-122).
+                row = await tx.fetchone("SELECT attempt FROM tasks WHERE id = ?", (task.id,))
+                if row is None or row["attempt"] != task.attempt:
+                    log.warning(
+                        "write for an attempt that is over; ignored",
+                        extra={"task_id": task.id, "attempt": task.attempt, "to": to.value},
+                    )
+                    return Applied.DROPPED
                 applied = await self.repo.transition_task(
                     tx, task, to, now=now, reason=update.reason, fields=fields
                 )
