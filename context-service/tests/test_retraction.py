@@ -249,6 +249,23 @@ async def test_retraction_scoped_to_investigation(
     assert (await counts(app))["decisions"] == 2
 
 
+async def test_cascade_does_not_cross_investigations(
+    client: httpx.AsyncClient, app: FastAPI, seeded: Seeded
+) -> None:
+    """A DERIVED_FROM chain low(A) <- X(B) <- g(A) must not flag g by traversing foreign X: every
+    node on the path is scoped to the addressed investigation, not just the endpoint."""
+    foreign, g = seeded.foreign, seeded.f1  # foreign: finding of INV_B; g: finding of INV
+    await derive(app, foreign, seeded.low)
+    await derive(app, g, foreign)
+    r = await client.post(retract_url(INV), headers=OPERATOR)
+    assert r.status_code == 201, r.text
+    impact = RetractionImpact.model_validate(r.json())
+    assert impact.finding_ids == [seeded.low]
+    assert impact.assertion_ids == await assertion_ids(app, [seeded.low])
+    got = await statuses(app, "Finding", [seeded.low, foreign, g])
+    assert got == {seeded.low: ("NEEDS_REVIEW", 2), foreign: ("ACTIVE", 1), g: ("ACTIVE", 1)}
+
+
 # --- errors and policy --------------------------------------------------------------------------
 
 

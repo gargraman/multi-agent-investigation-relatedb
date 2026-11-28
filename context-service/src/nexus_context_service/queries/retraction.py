@@ -16,12 +16,14 @@ RETURN e.status AS status, d.id AS decision_id, d.impact_json AS impact_json
 """
 
 # 2. I2. Findings SUPPORTED_BY the evidence plus every finding reaching them through
-# DERIVED_FROM at any depth; ``SUPERSEDED`` findings (and assessments) are neither changed nor
-# listed. Assertions are those of the listed findings.
+# DERIVED_FROM at any depth, every node on the path in this investigation (the predicate sits
+# inside the quantified path pattern, so a foreign finding cannot be traversed through).
+# ``SUPERSEDED`` findings (and assessments) are neither changed nor listed. Assertions are those
+# of the listed findings.
 IMPACT = """
 MATCH (:Investigation {id: $inv})-[:HAS_EVIDENCE]->(e:Evidence {uid: $uid})
 MATCH (e)<-[:SUPPORTED_BY]-(f:Finding)
-OPTIONAL MATCH (f)<-[:DERIVED_FROM]-+(g:Finding {investigation_id: $inv})
+OPTIONAL MATCH (f) (()<-[:DERIVED_FROM]-(:Finding {investigation_id: $inv}))+ (g)
 WITH collect(DISTINCT f) + collect(DISTINCT g) AS impacted
 UNWIND impacted AS x
 WITH DISTINCT x
