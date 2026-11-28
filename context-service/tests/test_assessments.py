@@ -281,6 +281,48 @@ async def test_citing_hidden_or_foreign_same_error(
     assert (await _counts(app))["assessments"] == 0
 
 
+async def test_retrieved_then_reclassified_above_clearance_rejected(
+    client: httpx.AsyncClient, app: FastAPI, seeded: Seeded
+) -> None:
+    """FR-211 "still visible": F2 was retrieved but is now above analysis clearance; the
+    rejection is indistinguishable from citing a finding that was never retrieved."""
+    await retrieve(client)
+    geo = batch_body(INV, task_id="tsk_geo3", findings=[_geoint_finding("ENT-BRAVO")])
+    [unretrieved] = (await _post_ok(client, "/v1/findings:batch", geo, GEOINT))["finding_ids"]
+    r = await client.post(
+        URL, json=assessment_body([seeded.f1, unretrieved]), headers=ANALYSIS_POST
+    )
+    assert r.status_code == 422, r.text
+    not_retrieved_body = r.json()
+    await read(app, "MATCH (e:AuditEvent {operation:'assessments.create'}) DETACH DELETE e")
+
+    await app.state.lane.run(
+        "test.reclassify",
+        lambda conn: conn.execute(
+            "MATCH (f:Finding {id:$id}) SET f.classification_rank = 3", {"id": seeded.f2}
+        ),
+    )
+    r = await client.post(URL, json=assessment_body([seeded.f1, seeded.f2]), headers=ANALYSIS_POST)
+    assert r.status_code == 422, r.text
+    assert r.json() == not_retrieved_body
+    assert r.json()["code"] == "unknown_finding_reference"
+    assert seeded.f2 not in r.text and seeded.f1 not in r.text
+    assert await _counts(app) == {"assessments": 0, "submissions": 0, "audits": 1}
+    rows = await read(
+        app,
+        "MATCH (e:AuditEvent {operation:'assessments.create'}) "
+        "RETURN properties(e) AS p, e.authz AS authz, e.outcome AS outcome",
+    )
+    assert rows[0]["authz"] == "DENIED" and rows[0]["outcome"] == "DENIED"
+    assert "target_id" in rows[0]["p"]
+    blob = repr(rows)
+    assert seeded.f1 not in blob and seeded.f2 not in blob
+    edges = await read(
+        app, "MATCH (:AuditEvent {operation:'assessments.create'})-[r]->(f:Finding) RETURN f.id"
+    )
+    assert edges == []
+
+
 async def test_cross_investigation_receipt_does_not_count(
     client: httpx.AsyncClient, app: FastAPI, seeded: Seeded
 ) -> None:
