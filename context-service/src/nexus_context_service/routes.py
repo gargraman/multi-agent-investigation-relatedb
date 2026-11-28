@@ -1,5 +1,5 @@
 """HTTP routes (spec §12.3). S1: investigation create/close + health probes. S2: findings batch
-and the investigation context read model."""
+and the investigation context read model. S4a: search and assessment submission."""
 
 from __future__ import annotations
 
@@ -8,10 +8,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Request, Response
 from fastapi.responses import JSONResponse
 
+from nexus_context_service.assessments import CitationRejected
 from nexus_context_service.auth import authorize
 from nexus_context_service.errors import ProblemError
 from nexus_context_service.repository import (
     AlreadyCommitted,
+    AssessmentAlreadyCommitted,
     AuditContext,
     BatchInvalid,
     GraphRepository,
@@ -21,6 +23,7 @@ from nexus_context_service.repository import (
     TaskOwnedByOtherCaller,
 )
 from nexus_context_service.scope import ReadScope, read_scope
+from nexus_contracts.api.assessments import AssessmentSubmission, AssessmentSubmissionResponse
 from nexus_contracts.api.context import (
     ContextInvestigationClose,
     ContextInvestigationClosed,
@@ -243,3 +246,62 @@ async def search(
         return await repo.search(body, scope)
     except InvestigationNotFound as exc:
         raise ProblemError(404, "investigation not found") from exc
+
+
+@router.post(
+    "/v1/assessments",
+    response_model=AssessmentSubmissionResponse,
+    status_code=201,
+    responses={
+        200: {"description": "Identical assessment replayed for this task_id: original response"},
+        403: _problem_doc(ProblemDetails, "caller not allowed"),
+        404: _problem_doc(ProblemDetails, "Unknown investigation"),
+        409: _problem_doc(
+            ProblemDetails,
+            "already_committed (different content; carries the committed assessment_id) or "
+            "investigation_cancelled (investigation is CLOSED)",
+        ),
+        422: _problem_doc(
+            ProblemDetails,
+            "schema_invalid, or unknown_finding_reference (a cited finding was not retrieved by "
+            "this task in this investigation, or is not visible; never says which)",
+        ),
+    },
+)
+async def submit_assessment(
+    body: AssessmentSubmission,
+    request: Request,
+    response: Response,
+    audit: Annotated[AuditContext, Depends(authorize("assessments.create"))],
+    repo: Annotated[GraphRepository, Depends(_repo)],
+    _: Annotated[None, Depends(_require_ready)],
+) -> AssessmentSubmissionResponse:
+    """S4a FR-209..212: one lane transaction, idempotent on ``assessment:{task_id}``; citations
+    are checked against the task's retrieval receipt after the replay check."""
+    try:
+        result, created = await repo.submit_assessment(
+            body, audit, max_rank=request.app.state.policy.read_rank(audit.caller)
+        )
+    except InvestigationNotFound as exc:
+        raise ProblemError(404, "investigation not found") from exc
+    except InvestigationClosed as exc:
+        raise ProblemError(
+            409, "investigation is closed", code=ErrorCode.INVESTIGATION_CANCELLED
+        ) from exc
+    except AssessmentAlreadyCommitted as exc:
+        raise ProblemError(
+            409,
+            "an assessment with different content was already committed for this task",
+            code=ErrorCode.ALREADY_COMMITTED,
+            extensions={"assessment_id": exc.assessment_id},
+        ) from exc
+    except CitationRejected as exc:
+        # Generic on purpose: no id, no reason (missing / foreign / hidden / not retrieved).
+        raise ProblemError(
+            422,
+            "assessment cites a finding outside this task's retrieval",
+            code=ErrorCode.UNKNOWN_FINDING_REFERENCE,
+        ) from exc
+    if not created:
+        response.status_code = 200
+    return result

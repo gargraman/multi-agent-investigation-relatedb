@@ -15,11 +15,15 @@ Audit policy (S1, extended in S2):
   ``outcome=FILTERED`` when clearance hid findings, else ``SUCCESS``; analysis reads also link it
   to the findings returned (``RETURNED``);
 - a search writes the same read audit event (``operation=search``) in its own transaction;
+- a committed assessment writes one ``AuditEvent`` that ``CONCERNS`` its ``Submission`` (S4a
+  FR-209); a rejected citation rolls the write back and writes a standalone ``DENIED`` event
+  (FR-211), with no finding id in it;
 - an authorization denial writes a standalone ``AuditEvent`` (``authz=DENIED``; ADR-002).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -29,8 +33,15 @@ from typing import TYPE_CHECKING, Any
 import relate
 from opentelemetry import trace
 
+from nexus_context_service.assessments import (
+    CitationRejected,
+    assessment_hash,
+    assessment_key,
+    used_finding_ids,
+)
 from nexus_context_service.ids import new_id
 from nexus_context_service.lane import LaneUnavailable, RelateLane
+from nexus_context_service.queries import assessments as aq_asm
 from nexus_context_service.queries import audit as aq
 from nexus_context_service.queries import context as cq
 from nexus_context_service.queries import findings as fq
@@ -38,6 +49,12 @@ from nexus_context_service.queries import investigations as q
 from nexus_context_service.queries import search as sq
 from nexus_context_service.queries.schema import SCHEMA_DDL
 from nexus_context_service.validation import referenced_ids, validate_batch
+from nexus_contracts.api.assessments import (
+    Assessment,
+    AssessmentSubmission,
+    AssessmentSubmissionResponse,
+    RejectedEdge,
+)
 from nexus_contracts.api.context import (
     ContextEvidenceRef,
     ContextFinding,
@@ -49,6 +66,7 @@ from nexus_contracts.api.context import (
     SearchRequest,
     SearchResponse,
 )
+from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.api.findings import (
     FindingBatchRequest,
     LinkedToAssertion,
@@ -85,6 +103,14 @@ class AlreadyCommitted(Exception):
     def __init__(self, finding_ids: list[str]) -> None:
         super().__init__("already committed")
         self.finding_ids = finding_ids
+
+
+class AssessmentAlreadyCommitted(Exception):
+    """An assessment for this task was committed with different content (FR-210)."""
+
+    def __init__(self, assessment_id: str) -> None:
+        super().__init__("already committed")
+        self.assessment_id = assessment_id
 
 
 class TaskOwnedByOtherCaller(Exception):
@@ -288,6 +314,30 @@ def _assemble_findings(
         )
         for f in findings
     ]
+
+
+_BODY_JSON_FIELDS = ("conclusions", "contradictions", "information_gaps", "follow_up_questions")
+
+
+def _body_json(body: AssessmentSubmission) -> str:
+    """Canonical JSON of an assessment's list fields, stored as one property (``body_json``)."""
+    return json.dumps(
+        body.model_dump(mode="json", include=set(_BODY_JSON_FIELDS)),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def _assessment(conn: relate.Connection, params: dict[str, Any]) -> Assessment | None:
+    """The assessment ``/context`` shows (FR-207), read with the caller's scope params."""
+    rows = _rows(
+        conn, cq.ASSESSMENT, {**params, "assessment_statuses": list(cq.ASSESSMENT_STATUSES)}
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    return Assessment(**json.loads(row.pop("body_json")), **row)
 
 
 class GraphRepository:
@@ -515,6 +565,132 @@ class GraphRepository:
                 log.warning("denial not audited: store not ready", extra={"op": "findings.submit"})
             raise
 
+    async def submit_assessment(
+        self, body: AssessmentSubmission, audit: AuditContext, *, max_rank: int
+    ) -> tuple[AssessmentSubmissionResponse, bool]:
+        """FR-209..212 in one lane transaction, in this order (the order is the decision):
+
+        1. investigation exists and is OPEN;
+        2. idempotency: same key + hash replays the stored response, different hash is a 409
+           (checked **before** citations, so a replay after a retraction still returns 200);
+        3. the task's retrieval receipt within this investigation;
+        4. every used id in the receipt and within ``max_rank`` (the caller's read clearance),
+           else ``CitationRejected``: the transaction rolls back and a ``DENIED`` audit event
+           (target = investigation, no finding id) is written in its own lane run;
+        5. ``NEEDS_REVIEW`` if any used finding is no longer trusted, else ``ACTIVE`` (FR-211a);
+        6. Submission, Assessment, BELONGS_TO, USES_FINDING, audit event CONCERNS Submission.
+
+        Returns ``(response, created)``; ``created`` is False for a replay."""
+        inv = body.investigation_id
+        key = assessment_key(body.task_id)
+        content_hash = assessment_hash(body)
+        used = used_finding_ids(body)
+
+        def _tx(conn: relate.Connection) -> tuple[AssessmentSubmissionResponse, bool]:
+            rows = conn.execute(aq_asm.CHECK_SUBMISSION, {"inv": inv, "key": key}).fetchall()
+            if not rows:
+                raise InvestigationNotFound(inv)
+            head = dict(rows[0])
+            if head["write_state"] == CLOSED:
+                raise InvestigationClosed(inv)
+            if head["response_json"] is not None:
+                if head["content_hash"] == content_hash:
+                    stored = AssessmentSubmissionResponse.model_validate_json(head["response_json"])
+                    return stored, False
+                raise AssessmentAlreadyCommitted(head["assessment_id"])
+
+            receipt = {
+                r["id"]: r
+                for r in _rows(
+                    conn,
+                    aq_asm.RECEIPT,
+                    {"inv": inv, "caller": audit.caller, "task_id": body.task_id},
+                )
+            }
+            cited = [receipt.get(fid) for fid in used]
+            if any(r is None or r["classification_rank"] > max_rank for r in cited):
+                raise CitationRejected()
+            top = max(cited, key=lambda r: r["classification_rank"])
+            trusted = all(r["status"] in cq.TRUSTED_STATUSES for r in cited)
+            status = "ACTIVE" if trusted else "NEEDS_REVIEW"
+
+            now = _now()
+            submission_id = new_id("sub")
+            assessment_id = new_id("asm")
+            response = AssessmentSubmissionResponse(
+                assessment_id=assessment_id,
+                accepted_edges=[],
+                # Placeholder until edge validation (S4a Task 6): every proposed edge is
+                # rejected individually; the assessment itself still commits (§8.5).
+                rejected_edges=[
+                    RejectedEdge(edge=e, code=ErrorCode.SCHEMA_INVALID) for e in body.proposed_edges
+                ],
+            )
+            common = {
+                "inv": inv,
+                "task_id": body.task_id,
+                "attempt": body.attempt,
+                "submission_id": submission_id,
+                "assessment_id": assessment_id,
+                "now": now,
+            }
+            conn.execute(
+                aq_asm.CREATE_SUBMISSION,
+                {
+                    **common,
+                    "key": key,
+                    "content_hash": content_hash,
+                    "caller": audit.caller,
+                    "response_json": response.model_dump_json(),
+                },
+            )
+            _count(
+                conn,
+                aq_asm.CREATE_ASSESSMENT,
+                {
+                    **common,
+                    "status": status,
+                    "classification": top["classification"],
+                    "classification_rank": top["classification_rank"],
+                    "summary": body.summary,
+                    "body_json": _body_json(body),
+                    "model_id": body.model_id,
+                    "prompt_version": body.prompt_version,
+                    "schema_version": body.schema_version,
+                },
+                1,
+            )
+            _count(
+                conn,
+                aq_asm.CREATE_USES_FINDING,
+                {"inv": inv, "assessment_id": assessment_id, "finding_ids": used},
+                len(used),
+            )
+            _write_audit(
+                conn,
+                audit,
+                operation="assessments.create",
+                target_id=submission_id,
+                authz="ALLOWED",
+                outcome="SUCCESS",
+                now=now,
+            )
+            return response, True
+
+        try:
+            return await self._lane.run("assessments.create", _tx)
+        except CitationRejected:
+            # The write rolled back with the raise; the denial is audited in its own committed
+            # transaction (as for TaskOwnedByOtherCaller). Target is the investigation: no
+            # finding id may appear in the audit row (FR-211, NFR-202).
+            try:
+                await self.record_denial(audit, "assessments.create", inv)
+            except LaneUnavailable:
+                log.warning(
+                    "denial not audited: store not ready", extra={"op": "assessments.create"}
+                )
+            raise
+
     async def get_context(self, investigation_id: str, scope: ReadScope) -> InvestigationContext:
         """Read model (FR-044) filtered by the caller's scope (S4a FR-202). The read and its
         audit event are one lane transaction (NFR-203); an unknown investigation raises
@@ -540,6 +716,7 @@ class GraphRepository:
                 investigation_id=investigation_id,
                 status=InvestigationStatus(inv["status"]),
                 findings=_assemble_findings(conn, params, findings),
+                assessment=_assessment(conn, params),
             )
 
         return await self._lane.run("investigations.context", _tx)

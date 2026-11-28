@@ -76,13 +76,18 @@ WHERE {RANK_HIDDEN} AND {TRUSTED}
 RETURN count(f) AS filtered
 """
 
-# Latest non-SUPERSEDED assessment the caller may read (Assessment.classification_rank, FR-212).
-# Assessments are written by S4a Task 5, which wires this into the read model; until then
-# ``InvestigationContext.assessment`` is always null and this query is not executed.
+# The investigation's latest assessment the caller may read (FR-207): status ACTIVE, DISPUTED or
+# NEEDS_REVIEW (never SUPERSEDED) and the assessment's own classification_rank within the caller's
+# clearance (FR-203, FR-212). Storage shape: ``queries.assessments``. Ties on created_at break on
+# the monotonic id.
+ASSESSMENT_STATUSES = ("ACTIVE", "DISPUTED", "NEEDS_REVIEW")
+
 ASSESSMENT = """
 MATCH (a:Assessment)-[:BELONGS_TO]->(:Investigation {id: $inv})
-WHERE a.status <> 'SUPERSEDED' AND a.classification_rank <= $max_rank
-RETURN a.id AS id
+WHERE a.status IN $assessment_statuses AND a.classification_rank <= $max_rank
+RETURN a.id AS assessment_id, a.investigation_id AS investigation_id, a.status AS status,
+       a.summary AS summary, a.body_json AS body_json, a.model_id AS model_id,
+       a.prompt_version AS prompt_version
 ORDER BY a.created_at DESC, a.id DESC
 LIMIT 1
 """
