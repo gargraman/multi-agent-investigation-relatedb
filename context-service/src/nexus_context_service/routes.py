@@ -1,5 +1,6 @@
 """HTTP routes (spec §12.3). S1: investigation create/close + health probes. S2: findings batch
-and the investigation context read model. S4a: search and assessment submission."""
+and the investigation context read model. S4a: search, assessment submission, evidence retraction,
+and the graph-value reads (I1 provenance, I3 contradictions, I4 links, I6 graph)."""
 
 from __future__ import annotations
 

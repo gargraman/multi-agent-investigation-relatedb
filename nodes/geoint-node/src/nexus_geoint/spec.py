@@ -26,7 +26,7 @@ class GeointSpec:
     task_types: tuple[str, ...] = pipeline.TASK_TYPES
     role: str = "GEOINT specialist: co-located and conflicting placements in synthetic sightings"
     version: str = __version__
-    clearance: Classification = Classification.DEMO_MID  # = Context Service CLEARANCE
+    clearance: Classification = Classification.DEMO_MID  # = policy.yaml write clearance
 
     def validate_request(
         self, request: TaskRequest, manifest: AgentManifest | None

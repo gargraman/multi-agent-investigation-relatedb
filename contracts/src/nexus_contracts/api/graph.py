@@ -2,10 +2,12 @@
 (S4a spec §8; ADR-007 G11).
 
 All are read models served by the Context Service and proxied by the orchestrator for the
-operator. Every record is filtered to the caller's clearance. The operator views (I1 provenance,
-I3 contradictions, I6 graph) show ``RETRACTED`` / ``NEEDS_REVIEW`` records with their status;
-trusted-only filtering (``ACTIVE`` / ``DISPUTED``) applies to analysis reads (``/context``,
-``/search``) and to the I4 hidden-link computation, whose paths rest on trusted findings only.
+operator. Findings and assessments are filtered to the caller's clearance; I6 entities and
+evidence are orchestrator-only and unfiltered (ruling T10-c). The operator views I1 provenance and
+I6 graph show ``RETRACTED`` / ``NEEDS_REVIEW`` records with their status (I3 returns finding ids
+only, with no status and no status filter). Trusted-only filtering (``ACTIVE`` / ``DISPUTED``)
+applies to analysis reads (``/context``, ``/search``) and to the I4 hidden-link computation,
+whose paths rest on trusted findings only.
 The spec fixes only the model names; the field sets are the smallest that carry what each query
 returns.
 
