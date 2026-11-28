@@ -16,6 +16,7 @@ from nexus_context_service.repository import (
     AssessmentAlreadyCommitted,
     AuditContext,
     BatchInvalid,
+    EvidenceNotFound,
     GraphRepository,
     InvestigationClosed,
     InvestigationContentConflict,
@@ -40,7 +41,8 @@ from nexus_contracts.api.findings import (
     FindingBatchResponse,
 )
 from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
-from nexus_contracts.common import EntityType
+from nexus_contracts.api.retraction import RetractEvidenceRequest, RetractionImpact
+from nexus_contracts.common import MANIFEST_ID_PATTERN, EntityType
 
 router = APIRouter()
 
@@ -305,3 +307,36 @@ async def submit_assessment(
     if not created:
         response.status_code = 200
     return result
+
+
+@router.post(
+    "/v1/investigations/{id}/evidence/{evidence_id}/retract",
+    response_model=RetractionImpact,
+    status_code=201,
+    responses={
+        200: {"description": "Evidence was already retracted: the original impact set"},
+        403: _problem_doc(ProblemDetails, "caller not allowed"),
+        404: _problem_doc(ProblemDetails, "Unknown investigation or evidence"),
+    },
+)
+async def retract_evidence(
+    id: Annotated[str, Path(pattern=INVESTIGATION_ID_PATTERN)],
+    evidence_id: Annotated[str, Path(pattern=MANIFEST_ID_PATTERN, max_length=128)],
+    response: Response,
+    audit: Annotated[AuditContext, Depends(authorize("evidence.retract"))],
+    repo: Annotated[GraphRepository, Depends(_repo)],
+    _: Annotated[None, Depends(_require_ready)],
+    body: RetractEvidenceRequest | None = None,
+) -> RetractionImpact:
+    """S4a FR-216 (I2): one lane transaction. 201 when newly retracted, 200 (nothing written)
+    when it already was; the orchestrator proxy relies on that to append its timeline event
+    once. Allowed on a closed investigation."""
+    try:
+        impact, created = await repo.retract_evidence(
+            id, evidence_id, body.reason if body else None, audit
+        )
+    except (InvestigationNotFound, EvidenceNotFound) as exc:
+        raise ProblemError(404, "evidence not found") from exc
+    if not created:
+        response.status_code = 200
+    return impact

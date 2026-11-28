@@ -63,8 +63,9 @@ SET i.write_state = 'CLOSED', i.status = $status, i.closed_at = $now
 """
 
 # Append-only audit (spec §14.4). CONCERNS is linked only when the target node exists (a denial
-# may name an id that was never created). Targets: an Investigation, or a Submission for a
-# committed findings batch (S2 G18). Ids are prefix-distinct, so at most one of the two matches.
+# may name an id that was never created). Targets: an Investigation, a Submission for a
+# committed findings batch (S2 G18), or a Decision for a retraction (S4a FR-216). Ids are
+# prefix-distinct, so at most one of the three matches.
 CREATE_AUDIT_EVENT = """
 CREATE (a:AuditEvent {
   id: $audit_id, caller: $caller, actor: $actor, operation: $operation,
@@ -76,4 +77,7 @@ FOREACH (_ IN CASE WHEN t IS NULL THEN [] ELSE [1] END | CREATE (a)-[:CONCERNS]-
 WITH a
 OPTIONAL MATCH (s:Submission {id: $target_id})
 FOREACH (_ IN CASE WHEN s IS NULL THEN [] ELSE [1] END | CREATE (a)-[:CONCERNS]->(s))
+WITH a
+OPTIONAL MATCH (d:Decision {id: $target_id})
+FOREACH (_ IN CASE WHEN d IS NULL THEN [] ELSE [1] END | CREATE (a)-[:CONCERNS]->(d))
 """

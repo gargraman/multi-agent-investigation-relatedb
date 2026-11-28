@@ -18,6 +18,8 @@ Audit policy (S1, extended in S2):
 - a committed assessment writes one ``AuditEvent`` that ``CONCERNS`` its ``Submission`` (S4a
   FR-209); a rejected citation rolls the write back and writes a standalone ``DENIED`` event
   (FR-211), with no finding id in it;
+- a retraction writes one ``AuditEvent`` that ``CONCERNS`` its ``Decision`` (S4a FR-216); retracting
+  already-retracted evidence returns the stored impact and writes nothing;
 - an authorization denial writes a standalone ``AuditEvent`` (``authz=DENIED``; ADR-002).
 """
 
@@ -48,6 +50,7 @@ from nexus_context_service.queries import audit as aq
 from nexus_context_service.queries import context as cq
 from nexus_context_service.queries import findings as fq
 from nexus_context_service.queries import investigations as q
+from nexus_context_service.queries import retraction as rq
 from nexus_context_service.queries import search as sq
 from nexus_context_service.queries.schema import SCHEMA_DDL
 from nexus_context_service.validation import referenced_ids, validate_batch
@@ -77,6 +80,7 @@ from nexus_contracts.api.findings import (
     PlacedAtAssertion,
 )
 from nexus_contracts.api.problem import FieldError
+from nexus_contracts.api.retraction import RetractionImpact
 from nexus_contracts.api.states import InvestigationStatus
 from nexus_contracts.common import Classification, EntityType, FindingKind, FindingStatus
 
@@ -115,6 +119,10 @@ class AssessmentAlreadyCommitted(Exception):
     def __init__(self, assessment_id: str) -> None:
         super().__init__("already committed")
         self.assessment_id = assessment_id
+
+
+class EvidenceNotFound(Exception):
+    """No such evidence in this investigation (the id is investigation-scoped)."""
 
 
 class TaskOwnedByOtherCaller(Exception):
@@ -740,6 +748,78 @@ class GraphRepository:
                     "denial not audited: store not ready", extra={"op": "assessments.create"}
                 )
             raise
+
+    async def retract_evidence(
+        self,
+        investigation_id: str,
+        evidence_id: str,
+        reason: str | None,
+        audit: AuditContext,
+    ) -> tuple[RetractionImpact, bool]:
+        """I2 / FR-216 in one lane transaction: evidence ``RETRACTED``, every dependent finding
+        (``SUPPORTED_BY`` it, or reaching those through ``DERIVED_FROM`` at any depth) and every
+        assessment using one ``NEEDS_REVIEW`` (``SUPERSEDED`` untouched and unlisted), a
+        ``Decision`` that ``DISPOSES`` the evidence and stores the impact, and the audit event.
+        Allowed on a CLOSED investigation (an operator disposition, not an agent write).
+
+        Returns ``(impact, newly_retracted)``. Already ``RETRACTED``: the impact stored on the
+        original ``Decision``, nothing written (no audit event either), ``False``."""
+        uid = f"{investigation_id}:{evidence_id}"
+        # ``audit.actor`` equals the caller when no valid X-Nexus-Actor was sent (or the caller
+        # may not send one): that is "unknown operator", not the service identity.
+        actor = "operator:unknown" if audit.actor == audit.caller else audit.actor
+
+        def _tx(conn: relate.Connection) -> tuple[RetractionImpact, bool]:
+            rows = conn.execute(rq.GET_EVIDENCE, {"inv": investigation_id, "uid": uid}).fetchall()
+            if not rows:
+                raise InvestigationNotFound(investigation_id)
+            head = dict(rows[0])
+            if head["status"] is None:
+                raise EvidenceNotFound(uid)
+            if head["status"] == "RETRACTED":
+                if head["impact_json"] is None:  # RETRACTED is only ever set with a Decision
+                    raise RuntimeError(f"evidence {uid} is RETRACTED without a Decision")
+                return RetractionImpact.model_validate_json(head["impact_json"]), False
+
+            row = conn.execute(rq.IMPACT, {"inv": investigation_id, "uid": uid}).single()
+            decision_id = new_id("dec")
+            impact = RetractionImpact(
+                evidence_id=evidence_id,
+                decision_id=decision_id,
+                finding_ids=sorted(row["findings"]),
+                assertion_ids=sorted(row["assertions"]),
+                assessment_ids=sorted(row["assessments"]),
+            )
+            now = _now()
+            conn.execute(rq.RETRACT_EVIDENCE, {"uid": uid, "now": now})
+            conn.execute(rq.FLAG_FINDINGS, {"ids": impact.finding_ids})
+            conn.execute(rq.FLAG_ASSESSMENTS, {"ids": impact.assessment_ids})
+            _count(
+                conn,
+                rq.CREATE_DECISION,
+                {
+                    "uid": uid,
+                    "inv": investigation_id,
+                    "decision_id": decision_id,
+                    "actor": actor,
+                    "reason": reason,
+                    "now": now,
+                    "impact_json": impact.model_dump_json(),
+                },
+                1,
+            )
+            _write_audit(
+                conn,
+                audit,
+                operation="evidence.retract",
+                target_id=decision_id,
+                authz="ALLOWED",
+                outcome="SUCCESS",
+                now=now,
+            )
+            return impact, True
+
+        return await self._lane.run("evidence.retract", _tx)
 
     async def get_context(self, investigation_id: str, scope: ReadScope) -> InvestigationContext:
         """Read model (FR-044) filtered by the caller's scope (S4a FR-202). The read and its
