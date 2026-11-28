@@ -1,0 +1,37 @@
+{
+  "additionalProperties": false,
+  "description": "Counts only, never ids of what was invalidated (S4a spec \u00a78, \u00a710).",
+  "properties": {
+    "assertions": {
+      "title": "Assertions",
+      "type": "integer"
+    },
+    "assessments": {
+      "title": "Assessments",
+      "type": "integer"
+    },
+    "decision_id": {
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "evidence_id": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "findings": {
+      "title": "Findings",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "evidence_id",
+    "decision_id",
+    "findings",
+    "assertions",
+    "assessments"
+  ],
+  "title": "EvidenceRetractedPayload",
+  "type": "object"
+}

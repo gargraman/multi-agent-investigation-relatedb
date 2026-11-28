@@ -10,6 +10,99 @@
       "title": "AgentId",
       "type": "string"
     },
+    "Assessment": {
+      "additionalProperties": false,
+      "description": "Read model (``GET /api/v1/investigations/{id}/assessment``); matches \u00a712.4.",
+      "properties": {
+        "assessment_id": {
+          "pattern": "^asm_[A-Za-z0-9_-]{1,64}$",
+          "title": "Assessment Id",
+          "type": "string"
+        },
+        "conclusions": {
+          "items": {
+            "$ref": "#/$defs/Conclusion"
+          },
+          "minItems": 1,
+          "title": "Conclusions",
+          "type": "array"
+        },
+        "contradictions": {
+          "items": {
+            "$ref": "#/$defs/Contradiction"
+          },
+          "title": "Contradictions",
+          "type": "array"
+        },
+        "follow_up_questions": {
+          "description": "\u00a76.4; absent from the \u00a712.4 example.",
+          "items": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Follow Up Questions",
+          "type": "array"
+        },
+        "information_gaps": {
+          "items": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Information Gaps",
+          "type": "array"
+        },
+        "investigation_id": {
+          "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+          "title": "Investigation Id",
+          "type": "string"
+        },
+        "model_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model Id",
+          "type": "string"
+        },
+        "prompt_version": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/AssessmentStatus"
+        },
+        "summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "conclusions",
+        "model_id",
+        "prompt_version",
+        "assessment_id",
+        "investigation_id",
+        "status"
+      ],
+      "title": "Assessment",
+      "type": "object"
+    },
+    "AssessmentStatus": {
+      "description": "Same lifecycle as Finding (\u00a79.2). An assessment is created ``ACTIVE``; there is no\n``DRAFT`` state (spec v1.3 corrected the \u00a712.4 example).",
+      "enum": [
+        "ACTIVE",
+        "DISPUTED",
+        "SUPERSEDED",
+        "NEEDS_REVIEW"
+      ],
+      "title": "AssessmentStatus",
+      "type": "string"
+    },
     "Classification": {
       "description": "Fictional demo classification levels (spec \u00a79.3).",
       "enum": [
@@ -19,6 +112,56 @@
       ],
       "title": "Classification",
       "type": "string"
+    },
+    "Conclusion": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "confidence_band": {
+          "$ref": "#/$defs/ConfidenceBand"
+        },
+        "kind": {
+          "$ref": "#/$defs/FindingKind"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "statement": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "supporting_finding_ids": {
+          "items": {
+            "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Supporting Finding Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "statement",
+        "kind",
+        "confidence",
+        "confidence_band",
+        "supporting_finding_ids"
+      ],
+      "title": "Conclusion",
+      "type": "object"
     },
     "ConfidenceBand": {
       "description": "Mandatory confidence band (spec \u00a79.2). Bands are documented, not calibrated.",
@@ -194,6 +337,40 @@
       "title": "ContextFinding",
       "type": "object"
     },
+    "Contradiction": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "effect_on_confidence": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Effect On Confidence",
+          "type": "string"
+        },
+        "finding_ids": {
+          "items": {
+            "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Finding Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "finding_ids",
+        "description",
+        "effect_on_confidence"
+      ],
+      "title": "Contradiction",
+      "type": "object"
+    },
     "FindingKind": {
       "description": "Finding kind (spec \u00a79.1, \u00a79.2): P0 folds \"Observation\" into Finding.",
       "enum": [
@@ -327,6 +504,18 @@
   "additionalProperties": false,
   "description": "Findings committed for one investigation, ordered by ``created_at`` then ``id``. Used by\nthe AC17 E2E and the UI via the orchestrator proxy (the Context Service network is\ninternal). Reading the store directly would break AC5.",
   "properties": {
+    "assessment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Assessment"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "S4a: the investigation's current assessment, if one has been submitted."
+    },
     "findings": {
       "items": {
         "$ref": "#/$defs/ContextFinding"

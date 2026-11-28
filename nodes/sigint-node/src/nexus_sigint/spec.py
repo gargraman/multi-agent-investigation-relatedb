@@ -26,7 +26,7 @@ class SigintSpec:
     task_types: tuple[str, ...] = pipeline.TASK_TYPES
     role: str = "SIGINT specialist: recurring contact patterns in synthetic communications metadata"
     version: str = __version__
-    clearance: Classification = Classification.DEMO_HIGH  # = Context Service CLEARANCE
+    clearance: Classification = Classification.DEMO_HIGH  # = policy.yaml write clearance
 
     def validate_request(
         self, request: TaskRequest, manifest: AgentManifest | None

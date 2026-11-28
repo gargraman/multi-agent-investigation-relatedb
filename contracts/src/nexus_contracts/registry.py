@@ -25,12 +25,15 @@ from nexus_contracts.api.context import (
     ContextInvestigationCreate,
     ContextInvestigationCreated,
     InvestigationContext,
+    SearchRequest,
+    SearchResponse,
 )
 from nexus_contracts.api.findings import (
     AlreadyCommittedProblem,
     FindingBatchRequest,
     FindingBatchResponse,
 )
+from nexus_contracts.api.graph import ContradictionPair, Graph, HiddenLink, Provenance
 from nexus_contracts.api.investigations import (
     Investigation,
     InvestigationCancelResponse,
@@ -39,7 +42,11 @@ from nexus_contracts.api.investigations import (
 )
 from nexus_contracts.api.problem import ProblemDetails
 from nexus_contracts.api.retraction import RetractEvidenceRequest, RetractionImpact
-from nexus_contracts.events.timeline import TimelineEvent, TimelinePage
+from nexus_contracts.events.timeline import (
+    EvidenceRetractedPayload,
+    TimelineEvent,
+    TimelinePage,
+)
 from nexus_contracts.scenario.fixtures import CommsLog, SightingLog
 from nexus_contracts.scenario.manifest import ScenarioManifest
 
@@ -65,6 +72,14 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "context-investigation-closed": ContextInvestigationClosed,
     "investigation-context": InvestigationContext,
     "already-committed-problem": AlreadyCommittedProblem,
+    # Graph governance and graph-value reads (S4a §8)
+    "search-request": SearchRequest,
+    "search-response": SearchResponse,
+    "provenance": Provenance,
+    "contradiction-pair": ContradictionPair,
+    "hidden-link": HiddenLink,
+    "graph": Graph,
+    "evidence-retracted-payload": EvidenceRetractedPayload,
     # Frontend API (§12.1)
     "investigation-create-request": InvestigationCreateRequest,
     "investigation": Investigation,

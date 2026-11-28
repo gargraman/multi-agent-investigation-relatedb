@@ -25,12 +25,6 @@ from nexus_contracts.api.findings import FindingBatchRequest, LinkedToAssertion
 from nexus_contracts.api.problem import FieldError
 from nexus_contracts.common import AgentId, Classification, EntityType
 
-# Max classification per caller (spec §14.1 table).
-CLEARANCE: dict[str, Classification] = {
-    AgentId.SIGINT.value: Classification.DEMO_HIGH,
-    AgentId.GEOINT.value: Classification.DEMO_MID,
-}
-
 INTEGRITY_ERROR_TYPE = "evidence_integrity"
 
 
@@ -92,13 +86,14 @@ def validate_batch(
     caller: str,
     entity_types: dict[str, str],
     evidence: dict[str, dict[str, Any]],
+    clearance: Classification | None,
 ) -> BatchValidation:
     """``entity_types``: manifest_id -> type; ``evidence``: manifest_id -> stored row
-    (``sha256``, ``owner``, ``classification``, ``status``), both for this investigation."""
+    (``sha256``, ``owner``, ``classification``, ``status``), both for this investigation;
+    ``clearance``: the caller's write clearance from the policy (``None``: may not submit)."""
     errors: list[FieldError] = []
     integrity = False
     rules = RULES.get(caller)
-    clearance = CLEARANCE.get(caller)
     if rules is None or clearance is None:  # policy allows only callers listed here
         return BatchValidation([_fe(["body"], "caller may not submit findings")], False)
 

@@ -45,6 +45,10 @@ class ContextServiceSettings(ServiceSettings):
     relate_flush_interval_s: float = Field(
         default=30.0, gt=0, description="Seconds between lane checkpoints (ADR-001 R2)."
     )
+    policy_path: Path | None = Field(
+        default=None,
+        description="Overrides the shipped config/policy.yaml (tests, ops); None uses the package.",
+    )
     relate_durability_mode: str | None = Field(
         default=None, description="Mirrors RELATE_DURABILITY_MODE; only unset or 'full'."
     )

@@ -496,6 +496,17 @@ class Repository:
     ) -> None:
         await self.append_event(tx, investigation_id, event_type, payload, now)
 
+    async def append_retraction_event(
+        self, investigation_id: str, payload: dict[str, Any], now: datetime
+    ) -> TimelineEvent:
+        """One ``evidence.retracted`` timeline row in its own transaction (S4a FR-220). Not
+        part of a workflow transition: the retraction itself is committed at the Context
+        Service, and the timeline only records that it happened."""
+        async with self.db.transaction() as tx:
+            return await self.append_event(
+                tx, investigation_id, TimelineEventType.EVIDENCE_RETRACTED, payload, now
+            )
+
     async def task_records(self, investigation_id: str) -> list[TaskRecord]:
         rows = await self.db.fetchall(
             "SELECT * FROM tasks WHERE investigation_id = ? ORDER BY created_at, id",

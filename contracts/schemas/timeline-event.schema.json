@@ -6,7 +6,8 @@
         "task.status_changed",
         "task.late_result",
         "transition.dropped",
-        "llm.replayed"
+        "llm.replayed",
+        "evidence.retracted"
       ],
       "title": "TimelineEventType",
       "type": "string"

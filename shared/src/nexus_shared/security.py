@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 ORCHESTRATOR = "orchestrator"
 ACTOR_HEADER = "X-Nexus-Actor"
+TASK_ID_HEADER = "X-Nexus-Task-Id"  # S4a: analysis-agent only; keys the retrieval receipt
 _ACTOR_RE = re.compile(r"^operator:[a-z0-9][a-z0-9._-]{0,63}$")
 
 

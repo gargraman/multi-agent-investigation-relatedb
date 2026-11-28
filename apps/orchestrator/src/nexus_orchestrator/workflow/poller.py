@@ -25,7 +25,16 @@ Each tick, only while this process **holds the leader lock** (ADR-005 D1):
 5. When every task row is terminal, apply the S2 terminal rule (``workflow/terminal.py``) and
    exit.
 
-A **resumed** driver (startup sweep, FR-127) runs its first tick as 3, 4, then 0, 1, 2: what the
+Every agent call in 1-4 (the cancel, the ``/readyz`` probe, the submit, the poll) runs as a
+background job, at most one per task (a cancel is tracked apart: the task's re-dispatch waits for
+it, since the agent cancels by task id and a late one would stop attempt 2). The steps keep their
+order, and their waits share one deadline per tick, ``JOB_WAIT_RATIO`` of the poll interval
+(0.5 s at 2 s). A healthy agent answers within it, so a timeout, re-dispatch and attempt-2 POST
+still land in one tick; a frozen agent (connected, never answering: the 5 s read timeout is
+spec-pinned) costs the other tasks at most that much, and its job carries on alone (NFR-101).
+
+A **resumed** driver (startup sweep, FR-127) runs its first tick as 3, 4 (that poll awaited in
+full, not bounded), then 0, 1, 2: what the
 agent finished during the outage is kept, and only a task with no terminal answer is timed out.
 Past the investigation deadline nothing is re-POSTed, nor is a PENDING task past its own deadline.
 After each COMPLETED task the analysis budget is checked and logged only (FR-128, ``budget.py``).
@@ -46,7 +55,7 @@ import contextlib
 import json
 import logging
 import random
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 from opentelemetry import propagate
@@ -84,10 +93,12 @@ from nexus_orchestrator.workflow.transitions import FIRST_ATTEMPT
 log = logging.getLogger(__name__)
 
 POLLED_STATES = frozenset({OrchestratorTaskState.DISPATCHED, OrchestratorTaskState.RUNNING})
-# A tick waits for its dispatch jobs at most this share of the poll interval (0.5 s at 2 s), so
-# a fast ack is polled in the same tick, while a slow or hung submit costs the other tasks at
-# most that much before the job goes on alone (NFR-101: one tick + this ≤ 3 s).
-DISPATCH_WAIT_RATIO = 0.25
+# A tick waits for its agent-call jobs (dispatch, poll, post-timeout cancel, re-dispatch probe)
+# at most this share of the poll interval in total (0.5 s at 2 s). A fast agent answers within
+# the tick; a slow or frozen one costs the other tasks at most that much before its job goes on
+# alone (NFR-101: tick budget + the longest jittered sleep, 0.5 + 2.4 s, stays ≤ 3 s). The 5 s
+# poll read timeout is spec-pinned (§8.3, ADR-003 B7), so the bound is on the wait, not the call.
+JOB_WAIT_RATIO = 0.25
 
 
 def skipped_agents(manifest: ScenarioManifest | None, tasks: list[TaskRecord]) -> list[AgentId]:
@@ -150,7 +161,11 @@ class Poller:
         self._no_reservation_logged: set[str] = set()  # log "nothing to retry with" once per task
         self.polls = 0  # observability for tests: number of GET /v1/tasks issued
         self._stopped = False
-        self._inflight: dict[str, asyncio.Task[None]] = {}  # task id -> its dispatch job
+        # task id -> its one agent-call job (dispatch, poll or re-dispatch), never two at once
+        self._inflight: dict[str, asyncio.Task[None]] = {}
+        # task id -> the agent cancel sent after its timeout; a re-dispatch waits for it, or a
+        # late cancel (by task id) would stop attempt 2 at the agent
+        self._cancels: dict[str, asyncio.Task[None]] = {}
         # Test observability: per driver "tick" | "wait" (on its dispatch jobs) | "sleep".
         self._phase: dict[str, str] = {}
         self._waiting_on: dict[str, list[asyncio.Task[None]]] = {}
@@ -181,8 +196,10 @@ class Poller:
         return {i for i, t in self._drivers.items() if not t.done()}
 
     def dispatches_busy(self) -> int:
-        """Dispatch jobs that are running and not sleeping between retry tries (for tests)."""
-        running = sum(1 for j in self._inflight.values() if not j.done())
+        """Agent-call jobs that are running and not sleeping between retry tries (for tests)."""
+        running = sum(
+            1 for j in [*self._inflight.values(), *self._cancels.values()] if not j.done()
+        )
         return running - self.dispatcher.backing_off
 
     def quiescent(self) -> bool:
@@ -200,7 +217,7 @@ class Poller:
     async def stop(self) -> None:
         """Graceful shutdown (ADR-005 D5): cancel drivers, change no state."""
         self._stopped = True
-        tasks = [*self._drivers.values(), *self._inflight.values()]
+        tasks = [*self._drivers.values(), *self._inflight.values(), *self._cancels.values()]
         for t in tasks:
             t.cancel()
         for t in tasks:
@@ -208,6 +225,7 @@ class Poller:
                 await t
         self._drivers.clear()
         self._inflight.clear()
+        self._cancels.clear()
 
     def _sleep_seconds(self) -> float:
         base = self.settings.poll_interval_seconds
@@ -244,9 +262,13 @@ class Poller:
                     if poll_first:
                         if manifest is not None and self.clock.now() < inv.deadline:
                             # Past the investigation deadline nothing is re-POSTed (FR-123).
-                            await self._await_dispatches(
+                            await self._await_jobs(
                                 investigation_id,
                                 await self._dispatch_pending(inv, tasks, manifest, first_sent),
+                                self.clock.now()
+                                + timedelta(
+                                    seconds=self.settings.poll_interval_seconds * JOB_WAIT_RATIO
+                                ),
                             )
                         await self._poll_open(inv, investigation_id)
                         tasks = await self.repo.task_records(investigation_id)
@@ -257,21 +279,37 @@ class Poller:
                     if self.clock.now() >= inv.deadline:
                         await self._deadline(inv, tasks)
                         return  # ended, or someone else already ended it: either way we are done
+                    # Every agent call below runs as a job. The steps stay in order (a cancel
+                    # settles before its task's re-dispatch, attempt 2 is POSTed, then polls),
+                    # and all their waits share one deadline: ``JOB_WAIT_RATIO`` of a poll
+                    # interval (NFR-101). A healthy agent finishes all of it in this tick; a
+                    # frozen one's job carries on alone and its task waits for a later tick.
+                    until = self.clock.now() + timedelta(
+                        seconds=self.settings.poll_interval_seconds * JOB_WAIT_RATIO
+                    )
                     due = deadlines.expired(tasks, self.clock.now())
                     if due:
-                        await asyncio.gather(*(self._time_out(t) for t in due))
+                        cancels = await asyncio.gather(*(self._time_out(t) for t in due))
+                        await self._await_jobs(
+                            investigation_id, [c for c in cancels if c is not None], until
+                        )
                         tasks = await self.repo.task_records(investigation_id)
                     retry = [t for t in tasks if deadlines.retry_eligible(t)]
                     if retry and manifest is not None:
-                        await asyncio.gather(*(self._redispatch(t, inv, manifest) for t in retry))
-                        tasks = await self.repo.task_records(investigation_id)
+                        started = self._start_redispatches(retry, inv, manifest)
+                        if started:
+                            await self._await_jobs(investigation_id, started, until)
+                            tasks = await self.repo.task_records(investigation_id)
                     if manifest is not None:
-                        await self._await_dispatches(
+                        await self._await_jobs(
                             investigation_id,
                             await self._dispatch_pending(inv, tasks, manifest, first_sent),
+                            until,
                         )
                     if not polled_first:
-                        await self._poll_open(inv, investigation_id)
+                        await self._await_jobs(
+                            investigation_id, await self._start_polls(inv, investigation_id), until
+                        )
                     if await self._maybe_finish(investigation_id, manifest):
                         return
             except asyncio.CancelledError:
@@ -293,35 +331,83 @@ class Poller:
         """Start a dispatch job for every PENDING task (any attempt) that still has time left and
         has no job in flight. The first dispatch of a ``(task, attempt)`` runs the FR-003 retry
         loop; later ticks send one try. A task at or past its deadline is left to the deadline
-        watcher (FR-120). Returns the jobs started (see ``_await_dispatches``)."""
+        watcher (FR-120). Returns the jobs started (see ``_await_jobs``)."""
         now = self.clock.now()
         started: list[asyncio.Task[None]] = []
         for t in tasks:
             if t.status is not OrchestratorTaskState.PENDING or now >= t.deadline:
                 continue
-            job = self._inflight.get(t.id)
-            if job is not None and not job.done():
-                continue  # one dispatch per task at a time; the next tick looks again
+            if self._busy(t.id):
+                continue  # one agent-call job per task at a time; the next tick looks again
             key = (t.id, t.attempt)
             single_shot = key in first_sent
             first_sent.add(key)
-            job = asyncio.create_task(
-                self._dispatch_job(inv, t, manifest, single_shot), name=f"dispatch-{t.id}"
+            started.append(
+                self._start_job(
+                    t.id,
+                    lambda t=t, one=single_shot: self.dispatcher.dispatch(
+                        inv, t, manifest, single_shot=one
+                    ),
+                    "dispatch",
+                )
             )
-            self._inflight[t.id] = job
-            job.add_done_callback(lambda done, tid=t.id: self._forget_job(tid, done))
-            started.append(job)
         return started
 
-    async def _await_dispatches(
-        self, investigation_id: str, jobs: list[asyncio.Task[None]]
+    def _start_job(
+        self, task_id: str, call: Callable[[], Awaitable[object]], kind: str
+    ) -> asyncio.Task[None]:
+        """Run one agent call for ``task_id`` off the tick, registered as its in-flight job."""
+        job = asyncio.create_task(self._guarded(call, kind, task_id), name=f"{kind}-{task_id}")
+        self._inflight[task_id] = job
+        job.add_done_callback(lambda done: self._forget_job(task_id, done))
+        return job
+
+    def _busy(self, task_id: str) -> bool:
+        job = self._inflight.get(task_id)
+        return job is not None and not job.done()
+
+    def _start_redispatches(
+        self, retry: list[TaskRecord], inv: InvestigationRecord, manifest: ScenarioManifest
+    ) -> list[asyncio.Task[None]]:
+        """A re-dispatch job (``/readyz`` probe, then the write) per retry-eligible task that has
+        no job in flight and whose post-timeout cancel has settled. Its PENDING attempt 2 is
+        POSTed by this tick's dispatch step if the job finishes within the tick's wait, else by a
+        later tick's."""
+        started = []
+        for t in retry:
+            cancel = self._cancels.get(t.id)
+            if self._busy(t.id) or (cancel is not None and not cancel.done()):
+                continue
+            started.append(
+                self._start_job(t.id, lambda t=t: self._redispatch(t, inv, manifest), "redispatch")
+            )
+        return started
+
+    async def _start_polls(
+        self, inv: InvestigationRecord, investigation_id: str
+    ) -> list[asyncio.Task[None]]:
+        """A poll job per DISPATCHED/RUNNING task with no job in flight (re-read: the dispatch
+        step moved some). A frozen agent's poll carries on alone; its task is skipped until the
+        poll returns, and a late result is version guarded like any other write."""
+        tasks = await self.repo.task_records(investigation_id)
+        return [
+            self._start_job(t.id, lambda t=t: self._poll_one(t, inv.trace_context_json), "poll")
+            for t in tasks
+            if t.status in POLLED_STATES and not self._busy(t.id)
+        ]
+
+    async def _await_jobs(
+        self, investigation_id: str, jobs: list[asyncio.Task[None]], until: datetime
     ) -> None:
-        """Wait for this tick's dispatch jobs, at most ``DISPATCH_WAIT_RATIO`` of a poll interval
-        on the clock. A job still running after that (a retry loop, a hung submit) carries on by
-        itself; the tick goes on to poll and later ticks skip its task until it is done."""
+        """Wait for this tick's agent-call jobs until ``until`` on the clock (the tick's share of
+        ``JOB_WAIT_RATIO``). A job still running after that (a retry loop, a frozen agent)
+        carries on by itself, and later ticks skip its task until it is done."""
         if not jobs:
             return
-        budget = self.settings.poll_interval_seconds * DISPATCH_WAIT_RATIO
+        budget = (until - self.clock.now()).total_seconds()
+        if budget <= 0 or all(j.done() for j in jobs):
+            await asyncio.sleep(0)  # let jobs that are already done run their callbacks
+            return
         timer = asyncio.ensure_future(self.clock.sleep(budget))
         all_done = asyncio.ensure_future(asyncio.wait(jobs))  # cancelling it leaves the jobs
         await asyncio.sleep(0)  # let the timer register on the clock before we say "wait"
@@ -341,19 +427,15 @@ class Poller:
         if self._inflight.get(task_id) is job:
             del self._inflight[task_id]
 
-    async def _dispatch_job(
-        self,
-        inv: InvestigationRecord,
-        task: TaskRecord,
-        manifest: ScenarioManifest,
-        single_shot: bool,
+    async def _guarded(
+        self, call: Callable[[], Awaitable[object]], kind: str, task_id: str
     ) -> None:
         try:
-            await self.dispatcher.dispatch(inv, task, manifest, single_shot=single_shot)
+            await call()
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("dispatch failed", extra={"task_id": task.id})
+            log.exception(f"{kind} job failed", extra={"task_id": task_id})
 
     async def _poll_open(self, inv: InvestigationRecord, investigation_id: str) -> None:
         """One poll of every DISPATCHED/RUNNING task (re-read: the dispatch step moved some)."""
@@ -438,12 +520,14 @@ class Poller:
                 },
             )
 
-    async def _time_out(self, task: TaskRecord) -> None:
+    async def _time_out(self, task: TaskRecord) -> asyncio.Task[None] | None:
         """FR-120: ``task`` is past its deadline → TIMED_OUT(deadline_exceeded), version guarded.
 
         The agent is told to stop only **after** the commit and only if this write was the one
         that applied: a task that finished first (DROPPED/NOOP) is not cancelled. The cancel is
-        best effort (FR-102) and never fails the tick."""
+        best effort (FR-102) and never fails the tick: it runs as a job (created inside the
+        ``workflow.timeout`` span, so its HTTP span stays a child), returned for the tick's bounded
+        wait. A re-dispatch of this task waits until it has settled."""
         trace_context_json = await self.repo.get_trace_context(task.investigation_id)
         attrs = {
             "nexus.investigation.id": task.investigation_id,
@@ -458,11 +542,21 @@ class Poller:
         ):
             update = TaskStateUpdate(OrchestratorTaskState.TIMED_OUT, ErrorCode.DEADLINE_EXCEEDED)
             applied = await self._record(task, update, None, trace_context_json)
-            if applied is Applied.APPLIED and task.status in POLLED_STATES:
-                try:
-                    await self.agents.cancel(task.agent_id, task.id)
-                except Exception:
-                    log.warning("agent cancel failed", extra={"task_id": task.id}, exc_info=True)
+            if applied is not Applied.APPLIED or task.status not in POLLED_STATES:
+                return None
+            job = asyncio.create_task(
+                self._guarded(
+                    lambda: self.agents.cancel(task.agent_id, task.id), "cancel", task.id
+                ),
+                name=f"cancel-{task.id}",
+            )
+        self._cancels[task.id] = job
+        job.add_done_callback(
+            lambda done: (
+                self._cancels.pop(task.id, None) if self._cancels.get(task.id) is done else None
+            )
+        )
+        return job
 
     def _note_no_reservation(self, task: TaskRecord, reservation: int) -> None:
         """Attempt 1 used the whole share: there is nothing to retry with, so the task stays
@@ -484,7 +578,8 @@ class Poller:
     ) -> None:
         """FR-121: a retry-eligible ``task`` goes back to PENDING as attempt 2, if its wait window
         is open, it has a reservation left and the agent's ``/readyz`` is green. The same tick's
-        dispatch step then POSTs it. Otherwise nothing is written; the next tick asks again until
+        dispatch step then POSTs it (this runs as a job: see ``_start_redispatches``). Otherwise
+        nothing is written; the next tick asks again until
         the window closes, after which the task is final.
 
         The readiness await is outside any transaction. Afterwards the task and the investigation
@@ -600,6 +695,15 @@ class Poller:
         with self.tracer.start_as_current_span("task.transition", context=parent, attributes=attrs):
             now = self.clock.now()
             async with self.db.transaction() as tx:
+                # A poll result or timeout is about ``task.attempt``: once a later attempt owns
+                # the row (a poll job that outlived its leader, say) it must not move it (FR-122).
+                row = await tx.fetchone("SELECT attempt FROM tasks WHERE id = ?", (task.id,))
+                if row is None or row["attempt"] != task.attempt:
+                    log.warning(
+                        "write for an attempt that is over; ignored",
+                        extra={"task_id": task.id, "attempt": task.attempt, "to": to.value},
+                    )
+                    return Applied.DROPPED
                 applied = await self.repo.transition_task(
                     tx, task, to, now=now, reason=update.reason, fields=fields
                 )

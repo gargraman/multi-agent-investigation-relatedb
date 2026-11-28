@@ -48,7 +48,7 @@ class AgentSpec(Protocol):
     task_types: tuple[str, ...]
     role: str  # agent card text
     version: str  # agent package version (agent card, OpenAPI)
-    clearance: Classification  # agent card; must match the Context Service CLEARANCE table
+    clearance: Classification  # agent card; must match the policy.yaml write clearance
 
     def validate_request(
         self, request: TaskRequest, manifest: AgentManifest | None

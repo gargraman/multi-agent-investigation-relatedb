@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -132,6 +133,9 @@ class FakeContextService:
         self.log: list[str] = []  # "create:<id>" / "close:<id>", in the order they were processed
         self.create_gate: asyncio.Event | None = None  # holds POST /v1/investigations until set
         self.create_entered = 0  # creates that reached the double (before the gate)
+        # POST .../evidence/{id}/retract: (investigation, evidence, X-Nexus-Actor, body)
+        self.retracts: list[tuple[str, str, str | None, dict | None]] = []
+        self.retracted: set[tuple[str, str]] = set()  # first retract -> 201, repeats -> 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if not self.up:
@@ -171,11 +175,103 @@ class FakeContextService:
             if inv_id not in self.registered:
                 return httpx.Response(404, json={"title": "Not Found", "status": 404})
             return httpx.Response(
-                200, json={"investigation_id": inv_id, "status": "RUNNING", "findings": []}
+                200,
+                json={
+                    "investigation_id": inv_id,
+                    "status": "RUNNING",
+                    "findings": [],
+                    "assessment": self.assessment,
+                },
             )
+        proxied = self._graph_governance(request)
+        if proxied is not None:
+            return proxied
         return httpx.Response(404, json={"title": "Not Found", "status": 404})
 
     context_status = 200  # force a non-200 answer on GET /v1/investigations/{id}/context
+
+    # -- S4a graph-governance routes (canned bodies; ``proxy_status`` forces a non-2xx answer) --
+    assessment: dict | None = None  # the ``assessment`` in the /context body
+    proxy_status: int | None = None
+    proxy_problem: dict | None = None  # JSON body sent with a forced ``proxy_status``
+    graph_body: dict = {  # noqa: RUF012
+        "nodes": [{"id": "inv_x", "label": "Investigation", "props": {"status": "RUNNING"}}],
+        "edges": [{"source": "inv_x", "target": "ent_1", "type": "HAS_ENTITY"}],
+    }
+    provenance_body: dict = {  # noqa: RUF012
+        "assessment_id": "asm_1",
+        "findings": [
+            {
+                "finding_id": "fnd_1",
+                "source_agent_id": "sigint-agent",
+                "status": "ACTIVE",
+                "classification": "DEMO-MID",
+                "evidence": [
+                    {
+                        "evidence_id": "ev-1",
+                        "sha256": "a" * 64,
+                        "owner_node_id": "ent-1",
+                        "status": "ACTIVE",
+                    }
+                ],
+            }
+        ],
+    }
+    contradictions_body: list = [{"finding_a": "fnd_1", "finding_b": "fnd_2"}]  # noqa: RUF012
+    links_body: list = [  # noqa: RUF012
+        {
+            "entity_a": "ent-a",
+            "via": "ent-v",
+            "entity_b": "ent-b",
+            "sigint_findings": ["fnd_1"],
+            "geoint_findings": ["fnd_2"],
+            "windows": [
+                {
+                    "cell_c": "cell-1",
+                    "cell_b": "cell-2",
+                    "from": "2026-01-01T00:00:00Z",
+                    "until": "2026-01-01T01:00:00Z",
+                }
+            ],
+            "disputed": False,
+        }
+    ]
+    retract_impact: dict = {  # noqa: RUF012
+        "decision_id": "dec-1",
+        "finding_ids": ["fnd_1", "fnd_2"],
+        "assertion_ids": ["a-1"],
+        "assessment_ids": ["asm_1"],
+    }
+
+    def _graph_governance(self, request: httpx.Request) -> httpx.Response | None:
+        path = request.url.path
+        retract = re.fullmatch(r"/v1/investigations/([^/]+)/evidence/([^/]+)/retract", path)
+        canned: dict[str, object] = {
+            r"/v1/investigations/[^/]+/graph": self.graph_body,
+            r"/v1/assessments/[^/]+/provenance": self.provenance_body,
+            r"/v1/investigations/[^/]+/entities/[^/]+/contradictions": self.contradictions_body,
+            r"/v1/investigations/[^/]+/links": self.links_body,
+        }
+        if retract is None and not (
+            request.method == "GET" and any(re.fullmatch(p, path) for p in canned)
+        ):
+            return None
+        if self.proxy_status is not None:
+            return httpx.Response(self.proxy_status, json=self.proxy_problem or {"title": "boom"})
+        if retract is not None:
+            inv_id, evidence_id = retract.groups()
+            body = json.loads(request.content) if request.content else None
+            self.retracts.append((inv_id, evidence_id, request.headers.get("x-nexus-actor"), body))
+            first = (inv_id, evidence_id) not in self.retracted
+            self.retracted.add((inv_id, evidence_id))
+            return httpx.Response(
+                201 if first else 200,
+                json={"evidence_id": evidence_id, **self.retract_impact},
+            )
+        for pattern, body_ in canned.items():
+            if re.fullmatch(pattern, path):
+                return httpx.Response(200, json=body_)
+        return None  # pragma: no cover
 
     async def _serve(self, request: httpx.Request) -> httpx.Response:
         if self.close_hangs and request.url.path.endswith("/close"):
@@ -212,6 +308,8 @@ class FakeAgent:
       alone (the orchestrator has already moved on, which is what the tests look at).
       ``submit_gate`` (an ``asyncio.Event``) holds ``POST /v1/tasks`` until set (a submit that is
       in flight while something else happens); ``log`` records submit/cancel landing order.
+      ``poll_gate`` / ``ready_gate`` do the same for ``GET /v1/tasks/{id}`` and ``GET /readyz``
+      (a frozen agent that accepts the connection and never answers).
       ``hang_cancel = True`` makes it never answer. ``journal``, when set, gets
       ``"cancel:<task_id>"`` appended per call (share one list with ``FakeContextService``).
     - ``GET /readyz``: 200, or 503 while ``ready = False`` (the re-dispatch gate, FR-121).
@@ -261,6 +359,10 @@ class FakeAgent:
         self.log: list[str] = []  # "submit:<id>" / "cancel:<id>", in the order they landed
         self.submit_gate: asyncio.Event | None = None  # holds POST /v1/tasks until set
         self.submit_entered = 0  # submits that reached the agent (before the gate)
+        self.poll_gate: asyncio.Event | None = None  # holds GET /v1/tasks/{id} until set
+        self.poll_entered = 0
+        self.ready_gate: asyncio.Event | None = None  # holds GET /readyz until set
+        self.ready_entered = 0
         self.card_reads = 0
         self.restart_pending = False
         self.answer_clock: FakeClock | None = None
@@ -338,6 +440,9 @@ class FakeAgent:
         @app.get("/readyz")
         async def readyz() -> JSONResponse:
             fake.readyz_hits += 1
+            if fake.ready_gate is not None:
+                fake.ready_entered += 1
+                await fake.ready_gate.wait()
             code = 200 if fake.ready else 503
             return JSONResponse({"status": "ready" if fake.ready else "starting"}, status_code=code)
 
@@ -399,6 +504,9 @@ class FakeAgent:
             if request.headers.get("authorization") != f"Bearer {TOKEN}":
                 return JSONResponse({"title": "Unauthorized", "status": 401}, status_code=401)
             fake.polls.append(task_id)
+            if fake.poll_gate is not None:
+                fake.poll_entered += 1
+                await fake.poll_gate.wait()
             task = fake.tasks.get(task_id)
             if task is None:
                 return JSONResponse({"title": "Not Found", "status": 404}, status_code=404)

@@ -4,8 +4,8 @@ The suffix fits the contract id patterns (``^fnd_[A-Za-z0-9_-]{1,64}$``, ``commo
 monotonic within this process, so the findings of one batch (which share ``created_at``) sort by
 id in submission order, which is how the context read model orders them.
 
-Prefixes: ``fnd_`` Finding, ``sub_`` Submission, ``asr_`` Assertion, ``aud_`` AuditEvent.
-(``asm_`` is the contract prefix for *Assessment* ids, so assertions do not reuse it.)
+Prefixes: ``fnd_`` Finding, ``sub_`` Submission, ``asr_`` Assertion, ``aud_`` AuditEvent,
+``asm_`` Assessment (the contract prefix for Assessment ids, so assertions do not reuse it).
 """
 
 from __future__ import annotations
