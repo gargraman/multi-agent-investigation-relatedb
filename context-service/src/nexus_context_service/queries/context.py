@@ -1,11 +1,26 @@
-"""``GET /v1/investigations/{id}/context`` read model Cypher (S2 spec FR-044, G5).
+"""``GET /v1/investigations/{id}/context`` read model Cypher (S2 spec FR-044, G5; S4a FR-202).
 
 Flat row queries assembled in Python (one read transaction on the lane), rather than nested
 collect subqueries: simpler to reason about on Relate and each query stays a plain pattern.
+
+Every query is filtered by the caller's read scope: ``$max_rank`` (clearance) and
+``$trusted_only`` (analysis reads see ACTIVE / DISPUTED findings only). The visibility predicate
+sits on the Finding in each, so a hidden finding's edges are hidden with it.
 """
 
-FINDINGS = """
+_VISIBLE = (
+    "f.classification_rank <= $max_rank "
+    "AND (NOT $trusted_only OR f.status IN ['ACTIVE', 'DISPUTED'])"
+)
+
+
+def _scoped(cypher: str) -> str:
+    return cypher.replace("<VISIBLE>", _VISIBLE)
+
+
+FINDINGS = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)
+WHERE <VISIBLE>
 RETURN f.id AS id, f.kind AS kind, f.status AS status, f.statement AS statement,
        f.confidence AS confidence, f.confidence_band AS confidence_band,
        f.classification AS classification, f.source_node_id AS source_node_id,
@@ -13,30 +28,52 @@ RETURN f.id AS id, f.kind AS kind, f.status AS status, f.statement AS statement,
        f.prompt_version AS prompt_version, f.valid_from AS valid_from,
        f.valid_until AS valid_until, f.created_at AS created_at
 ORDER BY f.created_at, f.id
-"""
+""")
 
-ABOUT = """
+ABOUT = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)-[:ABOUT]->(e:Entity)
+WHERE <VISIBLE>
 RETURN f.id AS fid, e.manifest_id AS manifest_id
-"""
+""")
 
-EVIDENCE = """
+EVIDENCE = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)-[r:SUPPORTED_BY]->(e:Evidence)
+WHERE <VISIBLE>
 RETURN f.id AS fid, e.manifest_id AS evidence_id, r.sha256 AS sha256, r.summary AS summary
-"""
+""")
 
-LINKED_TO = """
+LINKED_TO = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)-[:ASSERTS]->(a:Assertion)
-WHERE a.type = 'LINKED_TO'
+WHERE a.type = 'LINKED_TO' AND <VISIBLE>
 MATCH (a)-[:SUBJECT]->(s:Entity), (a)-[:OBJECT]->(o:Entity)
 RETURN f.id AS fid, s.manifest_id AS subject, o.manifest_id AS object,
        a.link_type AS link_type, a.valid_from AS valid_from, a.valid_until AS valid_until
-"""
+""")
 
-PLACED_AT = """
+PLACED_AT = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)-[:ASSERTS]->(a:Assertion)
-WHERE a.type = 'PLACED_AT'
+WHERE a.type = 'PLACED_AT' AND <VISIBLE>
 MATCH (a)-[:SUBJECT]->(s:Entity), (a)-[:AT]->(l:Location)
 RETURN f.id AS fid, s.manifest_id AS subject, l.manifest_id AS location,
        a.valid_from AS valid_from, a.valid_until AS valid_until
+""")
+
+# Findings the caller's clearance hides. The trusted filter applies first, so an untrusted
+# finding is never counted (S4a FR-205): it is "not visible", not "above clearance".
+COUNT_FILTERED = """
+MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)
+WHERE f.classification_rank > $max_rank
+  AND (NOT $trusted_only OR f.status IN ['ACTIVE', 'DISPUTED'])
+RETURN count(f) AS filtered
+"""
+
+# Latest non-SUPERSEDED assessment the caller may read (Assessment.classification_rank, FR-212).
+# Assessments are written by S4a Task 5, which wires this into the read model; until then
+# ``InvestigationContext.assessment`` is always null and this query is not executed.
+ASSESSMENT = """
+MATCH (a:Assessment)-[:BELONGS_TO]->(:Investigation {id: $inv})
+WHERE a.status <> 'SUPERSEDED' AND a.classification_rank <= $max_rank
+RETURN a.id AS id
+ORDER BY a.created_at DESC, a.id DESC
+LIMIT 1
 """

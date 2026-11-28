@@ -20,6 +20,7 @@ from nexus_context_service.repository import (
     InvestigationNotFound,
     TaskOwnedByOtherCaller,
 )
+from nexus_context_service.scope import ReadScope, read_scope
 from nexus_contracts.api.context import (
     ContextInvestigationClose,
     ContextInvestigationClosed,
@@ -204,15 +205,18 @@ async def submit_findings(
 @router.get(
     "/v1/investigations/{id}/context",
     response_model=InvestigationContext,
-    responses={404: _problem_doc(ProblemDetails, "Unknown investigation")},
+    responses={
+        400: _problem_doc(ProblemDetails, "analysis-agent read without a valid X-Nexus-Task-Id"),
+        404: _problem_doc(ProblemDetails, "Unknown investigation"),
+    },
 )
 async def investigation_context(
     id: Annotated[str, Path(pattern=INVESTIGATION_ID_PATTERN)],
-    audit: Annotated[AuditContext, Depends(authorize("investigations.context"))],
+    scope: Annotated[ReadScope, Depends(read_scope("investigations.context"))],
     repo: Annotated[GraphRepository, Depends(_repo)],
     _: Annotated[None, Depends(_require_ready)],
 ) -> InvestigationContext:
     try:
-        return await repo.get_context(id)
+        return await repo.get_context(id, scope)
     except InvestigationNotFound as exc:
         raise ProblemError(404, "investigation not found") from exc

@@ -11,6 +11,9 @@ Audit policy (S1, extended in S2):
   and a rejected conflict / validation failure (``409``/``422``) write **nothing**: no state
   changed, so there is nothing to audit, and a replay must leave the store byte-for-byte as it
   was (ADR-002 A1 "writing nothing new");
+- a context read writes one ``AuditEvent`` in the same transaction as the read (S4a FR-204):
+  ``outcome=FILTERED`` when clearance hid findings, else ``SUCCESS``; analysis reads also link it
+  to the findings returned (``RETURNED``);
 - an authorization denial writes a standalone ``AuditEvent`` (``authz=DENIED``; ADR-002).
 """
 
@@ -20,13 +23,14 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import relate
 from opentelemetry import trace
 
 from nexus_context_service.ids import new_id
 from nexus_context_service.lane import LaneUnavailable, RelateLane
+from nexus_context_service.queries import audit as aq
 from nexus_context_service.queries import context as cq
 from nexus_context_service.queries import findings as fq
 from nexus_context_service.queries import investigations as q
@@ -49,6 +53,9 @@ from nexus_contracts.api.findings import (
 from nexus_contracts.api.problem import FieldError
 from nexus_contracts.api.states import InvestigationStatus
 from nexus_contracts.common import Classification, EntityType
+
+if TYPE_CHECKING:  # scope.py imports this module (AuditContext); avoid the runtime cycle
+    from nexus_context_service.scope import ReadScope
 
 OPEN = "OPEN"
 CLOSED = "CLOSED"
@@ -140,6 +147,44 @@ def _write_audit(
             "trace_id": _trace_id(),
         },
     )
+
+
+def _write_read_audit(
+    conn: relate.Connection,
+    scope: ReadScope,
+    *,
+    operation: str,
+    investigation_id: str,
+    filtered: int,
+    returned_ids: list[str],
+    now: datetime,
+) -> None:
+    """One ``AuditEvent`` for a read (S4a FR-204/FR-205): the **count** hidden by clearance,
+    never their ids (NFR-202). When the scope carries a task id (analysis reads) the event also
+    links ``RETURNED`` to each finding handed back: the retrieval receipt assessments cite."""
+    audit_id = f"aud_{uuid.uuid4().hex}"
+    conn.execute(
+        aq.CREATE_READ_AUDIT_EVENT,
+        {
+            "audit_id": audit_id,
+            "caller": scope.audit.caller,
+            "actor": scope.audit.actor,
+            "operation": operation,
+            "target_id": investigation_id,
+            "outcome": "FILTERED" if filtered else "SUCCESS",
+            "now": now,
+            "trace_id": _trace_id(),
+            "filtered": filtered,
+            "task_id": scope.task_id,
+        },
+    )
+    if scope.task_id is not None and returned_ids:
+        _count(
+            conn,
+            aq.CREATE_RETURNED,
+            {"audit_id": audit_id, "finding_ids": returned_ids},
+            len(returned_ids),
+        )
 
 
 def _count(conn: relate.Connection, cypher: str, params: dict[str, Any], expected: int) -> None:
@@ -429,9 +474,15 @@ class GraphRepository:
                 log.warning("denial not audited: store not ready", extra={"op": "findings.submit"})
             raise
 
-    async def get_context(self, investigation_id: str) -> InvestigationContext:
-        """Read model (FR-044). Orchestrator view: DEMO-HIGH clearance, so nothing is filtered."""
-        params = {"inv": investigation_id}
+    async def get_context(self, investigation_id: str, scope: ReadScope) -> InvestigationContext:
+        """Read model (FR-044) filtered by the caller's scope (S4a FR-202). The read and its
+        audit event are one lane transaction (NFR-203); an unknown investigation raises
+        ``InvestigationNotFound`` and rolls both back."""
+        params = {
+            "inv": investigation_id,
+            "max_rank": scope.max_rank,
+            "trusted_only": scope.trusted_only,
+        }
 
         def _rows(conn: relate.Connection, cypher: str) -> list[dict[str, Any]]:
             return [dict(r) for r in conn.execute(cypher, params).fetchall()]
@@ -452,6 +503,16 @@ class GraphRepository:
                 assertions.setdefault(r.pop("fid"), []).append(LinkedToAssertion(**r))
             for r in _rows(conn, cq.PLACED_AT):
                 assertions.setdefault(r.pop("fid"), []).append(PlacedAtAssertion(**r))
+            filtered = conn.execute(cq.COUNT_FILTERED, params).single()["filtered"]
+            _write_read_audit(
+                conn,
+                scope,
+                operation="investigations.context",
+                investigation_id=investigation_id,
+                filtered=filtered,
+                returned_ids=[f["id"] for f in findings],
+                now=_now(),
+            )
             # Lists inside a finding carry no order semantics (content_hash sorts them too), so
             # they come back in a stable canonical order.
             return InvestigationContext(
