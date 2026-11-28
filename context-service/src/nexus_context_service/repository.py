@@ -14,6 +14,7 @@ Audit policy (S1, extended in S2):
 - a context read writes one ``AuditEvent`` in the same transaction as the read (S4a FR-204):
   ``outcome=FILTERED`` when clearance hid findings, else ``SUCCESS``; analysis reads also link it
   to the findings returned (``RETURNED``);
+- a search writes the same read audit event (``operation=search``) in its own transaction;
 - an authorization denial writes a standalone ``AuditEvent`` (``authz=DENIED``; ADR-002).
 """
 
@@ -34,6 +35,7 @@ from nexus_context_service.queries import audit as aq
 from nexus_context_service.queries import context as cq
 from nexus_context_service.queries import findings as fq
 from nexus_context_service.queries import investigations as q
+from nexus_context_service.queries import search as sq
 from nexus_context_service.queries.schema import SCHEMA_DDL
 from nexus_context_service.validation import referenced_ids, validate_batch
 from nexus_contracts.api.context import (
@@ -44,6 +46,8 @@ from nexus_contracts.api.context import (
     ContextInvestigationCreate,
     ContextInvestigationCreated,
     InvestigationContext,
+    SearchRequest,
+    SearchResponse,
 )
 from nexus_contracts.api.findings import (
     FindingBatchRequest,
@@ -247,6 +251,43 @@ def _batch_rows(
 def _get(conn: relate.Connection, investigation_id: str) -> dict[str, Any] | None:
     rows = conn.execute(q.GET_INVESTIGATION, {"id": investigation_id}).fetchall()
     return dict(rows[0]) if rows else None
+
+
+def _rows(conn: relate.Connection, cypher: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    return [dict(r) for r in conn.execute(cypher, params).fetchall()]
+
+
+def _assemble_findings(
+    conn: relate.Connection, params: dict[str, Any], findings: list[dict[str, Any]]
+) -> list[ContextFinding]:
+    """``ContextFinding`` rows for already-selected finding rows (kept in the given order): the
+    one assembly shared by ``/context`` and ``/search`` (FR-044, FR-208). ``params`` carry the
+    caller's read scope, so a hidden finding's edges are hidden with it."""
+    if not findings:
+        return []
+    params = {**params, "finding_ids": [f["id"] for f in findings]}
+    about: dict[str, list[str]] = {}
+    for r in _rows(conn, cq.ABOUT, params):
+        about.setdefault(r["fid"], []).append(r["manifest_id"])
+    evidence: dict[str, list[ContextEvidenceRef]] = {}
+    for r in _rows(conn, cq.EVIDENCE, params):
+        evidence.setdefault(r.pop("fid"), []).append(ContextEvidenceRef(**r))
+    assertions: dict[str, list[LinkedToAssertion | PlacedAtAssertion]] = {}
+    for r in _rows(conn, cq.LINKED_TO, params):
+        assertions.setdefault(r.pop("fid"), []).append(LinkedToAssertion(**r))
+    for r in _rows(conn, cq.PLACED_AT, params):
+        assertions.setdefault(r.pop("fid"), []).append(PlacedAtAssertion(**r))
+    # Lists inside a finding carry no order semantics (content_hash sorts them too), so they
+    # come back in a stable canonical order.
+    return [
+        ContextFinding(
+            **f,
+            about=sorted(about.get(f["id"], [])),
+            evidence=sorted(evidence.get(f["id"], []), key=lambda e: e.evidence_id),
+            assertions=sorted(assertions.get(f["id"], []), key=lambda a: a.sort_key()),
+        )
+        for f in findings
+    ]
 
 
 class GraphRepository:
@@ -480,25 +521,11 @@ class GraphRepository:
         ``InvestigationNotFound`` and rolls both back."""
         params = {"inv": investigation_id, **scope.query_params()}
 
-        def _rows(conn: relate.Connection, cypher: str) -> list[dict[str, Any]]:
-            return [dict(r) for r in conn.execute(cypher, params).fetchall()]
-
         def _tx(conn: relate.Connection) -> InvestigationContext:
             inv = _get(conn, investigation_id)
             if inv is None:
                 raise InvestigationNotFound(investigation_id)
-            findings = _rows(conn, cq.FINDINGS)
-            about: dict[str, list[str]] = {}
-            for r in _rows(conn, cq.ABOUT):
-                about.setdefault(r["fid"], []).append(r["manifest_id"])
-            evidence: dict[str, list[ContextEvidenceRef]] = {}
-            for r in _rows(conn, cq.EVIDENCE):
-                evidence.setdefault(r.pop("fid"), []).append(ContextEvidenceRef(**r))
-            assertions: dict[str, list[LinkedToAssertion | PlacedAtAssertion]] = {}
-            for r in _rows(conn, cq.LINKED_TO):
-                assertions.setdefault(r.pop("fid"), []).append(LinkedToAssertion(**r))
-            for r in _rows(conn, cq.PLACED_AT):
-                assertions.setdefault(r.pop("fid"), []).append(PlacedAtAssertion(**r))
+            findings = _rows(conn, cq.FINDINGS, params)
             filtered = conn.execute(cq.COUNT_FILTERED, params).single()["filtered"]
             _write_read_audit(
                 conn,
@@ -509,23 +536,49 @@ class GraphRepository:
                 returned_ids=[f["id"] for f in findings],
                 now=_now(),
             )
-            # Lists inside a finding carry no order semantics (content_hash sorts them too), so
-            # they come back in a stable canonical order.
             return InvestigationContext(
                 investigation_id=investigation_id,
                 status=InvestigationStatus(inv["status"]),
-                findings=[
-                    ContextFinding(
-                        **f,
-                        about=sorted(about.get(f["id"], [])),
-                        evidence=sorted(evidence.get(f["id"], []), key=lambda e: e.evidence_id),
-                        assertions=sorted(assertions.get(f["id"], []), key=lambda a: a.sort_key()),
-                    )
-                    for f in findings
-                ],
+                findings=_assemble_findings(conn, params, findings),
             )
 
         return await self._lane.run("investigations.context", _tx)
+
+    async def search(self, body: SearchRequest, scope: ReadScope) -> SearchResponse:
+        """Structured search (FR-208) filtered by the caller's scope. Same transaction shape as
+        ``get_context``: read, hidden count and audit event are one lane transaction, and an
+        unknown investigation raises ``InvestigationNotFound`` and rolls all of it back. The
+        hidden count covers only findings matching the request's other filters."""
+        inv_id = body.investigation_id
+        params = {
+            "inv": inv_id,
+            **scope.query_params(),
+            "entity_ids": body.entity_ids,
+            "kinds": [k.value for k in body.kinds],
+            "statuses": [s.value for s in body.statuses],
+        }
+
+        def _tx(conn: relate.Connection) -> SearchResponse:
+            if _get(conn, inv_id) is None:
+                raise InvestigationNotFound(inv_id)
+            rows = _rows(conn, sq.SEARCH_FINDINGS, {**params, "fetch_limit": body.limit + 1})
+            truncated = len(rows) > body.limit
+            rows = rows[: body.limit]
+            filtered = conn.execute(sq.COUNT_FILTERED_MATCHING, params).single()["filtered"]
+            _write_read_audit(
+                conn,
+                scope,
+                operation="search",
+                investigation_id=inv_id,
+                filtered=filtered,
+                returned_ids=[f["id"] for f in rows],
+                now=_now(),
+            )
+            return SearchResponse(
+                findings=_assemble_findings(conn, params, rows), truncated=truncated
+            )
+
+        return await self._lane.run("search", _tx)
 
     async def record_denial(
         self, audit: AuditContext, operation: str, target_id: str | None

@@ -3,6 +3,9 @@
 Flat row queries assembled in Python (one read transaction on the lane), rather than nested
 collect subqueries: simpler to reason about on Relate and each query stays a plain pattern.
 
+The row queries other than ``FINDINGS`` are restricted to ``$finding_ids`` (the findings being
+assembled), so a search assembles only what it returns.
+
 Every query is filtered by the caller's read scope: ``$max_rank`` (clearance) and
 ``$trusted_only`` over ``$trusted_statuses`` (analysis reads see ACTIVE / DISPUTED findings only).
 The visibility predicate sits on the Finding in each, so a hidden finding's edges are hidden with
@@ -22,33 +25,36 @@ def _scoped(cypher: str) -> str:
     return cypher.replace("<VISIBLE>", _VISIBLE)
 
 
-FINDINGS = _scoped("""
-MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)
-WHERE <VISIBLE>
-RETURN f.id AS id, f.kind AS kind, f.status AS status, f.statement AS statement,
-       f.confidence AS confidence, f.confidence_band AS confidence_band,
+# Row shape of a finding, shared with ``queries.search`` so both reads assemble identically.
+FINDING_COLUMNS = """RETURN f.id AS id, f.kind AS kind, f.status AS status,
+       f.statement AS statement, f.confidence AS confidence, f.confidence_band AS confidence_band,
        f.classification AS classification, f.source_node_id AS source_node_id,
        f.task_id AS task_id, f.attempt AS attempt, f.model_id AS model_id,
        f.prompt_version AS prompt_version, f.valid_from AS valid_from,
-       f.valid_until AS valid_until, f.created_at AS created_at
+       f.valid_until AS valid_until, f.created_at AS created_at"""
+
+FINDINGS = _scoped(f"""
+MATCH (:Investigation {{id: $inv}})-[:CONTAINS]->(f:Finding)
+WHERE <VISIBLE>
+{FINDING_COLUMNS}
 ORDER BY f.created_at, f.id
 """)
 
 ABOUT = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)-[:ABOUT]->(e:Entity)
-WHERE <VISIBLE>
+WHERE <VISIBLE> AND f.id IN $finding_ids
 RETURN f.id AS fid, e.manifest_id AS manifest_id
 """)
 
 EVIDENCE = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)-[r:SUPPORTED_BY]->(e:Evidence)
-WHERE <VISIBLE>
+WHERE <VISIBLE> AND f.id IN $finding_ids
 RETURN f.id AS fid, e.manifest_id AS evidence_id, r.sha256 AS sha256, r.summary AS summary
 """)
 
 LINKED_TO = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)-[:ASSERTS]->(a:Assertion)
-WHERE a.type = 'LINKED_TO' AND <VISIBLE>
+WHERE a.type = 'LINKED_TO' AND <VISIBLE> AND f.id IN $finding_ids
 MATCH (a)-[:SUBJECT]->(s:Entity), (a)-[:OBJECT]->(o:Entity)
 RETURN f.id AS fid, s.manifest_id AS subject, o.manifest_id AS object,
        a.link_type AS link_type, a.valid_from AS valid_from, a.valid_until AS valid_until
@@ -56,7 +62,7 @@ RETURN f.id AS fid, s.manifest_id AS subject, o.manifest_id AS object,
 
 PLACED_AT = _scoped("""
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)-[:ASSERTS]->(a:Assertion)
-WHERE a.type = 'PLACED_AT' AND <VISIBLE>
+WHERE a.type = 'PLACED_AT' AND <VISIBLE> AND f.id IN $finding_ids
 MATCH (a)-[:SUBJECT]->(s:Entity), (a)-[:AT]->(l:Location)
 RETURN f.id AS fid, s.manifest_id AS subject, l.manifest_id AS location,
        a.valid_from AS valid_from, a.valid_until AS valid_until
