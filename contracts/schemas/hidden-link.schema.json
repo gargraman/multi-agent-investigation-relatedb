@@ -1,0 +1,100 @@
+{
+  "$defs": {
+    "HiddenLinkWindow": {
+      "additionalProperties": false,
+      "description": "Time window in which the ``via`` entity was co-located with the two cells ``cell_c`` and\n``cell_b`` (I4 corroboration; ``from``/``until`` are UTC).",
+      "properties": {
+        "cell_b": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Cell B",
+          "type": "string"
+        },
+        "cell_c": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Cell C",
+          "type": "string"
+        },
+        "from": {
+          "format": "date-time",
+          "title": "From",
+          "type": "string"
+        },
+        "until": {
+          "format": "date-time",
+          "title": "Until",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cell_c",
+        "cell_b",
+        "from",
+        "until"
+      ],
+      "title": "HiddenLinkWindow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "disputed": {
+      "description": "True when any supporting finding is ``DISPUTED``.",
+      "title": "Disputed",
+      "type": "boolean"
+    },
+    "entity_a": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Entity A",
+      "type": "string"
+    },
+    "entity_b": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Entity B",
+      "type": "string"
+    },
+    "geoint_findings": {
+      "items": {
+        "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+        "type": "string"
+      },
+      "title": "Geoint Findings",
+      "type": "array"
+    },
+    "sigint_findings": {
+      "items": {
+        "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+        "type": "string"
+      },
+      "title": "Sigint Findings",
+      "type": "array"
+    },
+    "via": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "title": "Via",
+      "type": "string"
+    },
+    "windows": {
+      "items": {
+        "$ref": "#/$defs/HiddenLinkWindow"
+      },
+      "title": "Windows",
+      "type": "array"
+    }
+  },
+  "required": [
+    "entity_a",
+    "via",
+    "entity_b",
+    "sigint_findings",
+    "geoint_findings",
+    "windows",
+    "disputed"
+  ],
+  "title": "HiddenLink",
+  "type": "object"
+}

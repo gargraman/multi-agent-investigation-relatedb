@@ -22,6 +22,7 @@ from nexus_contracts.common import (
     AgentId,
     Attempt,
     InvestigationId,
+    ManifestId,
     TaskId,
     UtcDatetime,
     ValueModel,
@@ -34,6 +35,7 @@ class TimelineEventType(StrEnum):
     TASK_LATE_RESULT = "task.late_result"  # §8.2 sticky terminal states
     TRANSITION_DROPPED = "transition.dropped"  # §8.3 / ADR-008 F4 version conflict note
     LLM_REPLAYED = "llm.replayed"  # §13.2 "the timeline marks every replayed call"
+    EVIDENCE_RETRACTED = "evidence.retracted"  # S4a: I2 retraction committed
 
 
 class InvestigationStatusChanged(ValueModel):
@@ -63,10 +65,21 @@ class TaskLateResult(ValueModel):
     recorded_state: OrchestratorTaskState
 
 
+class EvidenceRetractedPayload(ValueModel):
+    """Counts only, never ids of what was invalidated (S4a spec §8, §10)."""
+
+    evidence_id: ManifestId
+    decision_id: str
+    findings: int
+    assertions: int
+    assessments: int
+
+
 _TYPED_PAYLOADS: dict[TimelineEventType, type[ValueModel]] = {
     TimelineEventType.INVESTIGATION_STATUS_CHANGED: InvestigationStatusChanged,
     TimelineEventType.TASK_STATUS_CHANGED: TaskStatusChanged,
     TimelineEventType.TASK_LATE_RESULT: TaskLateResult,
+    TimelineEventType.EVIDENCE_RETRACTED: EvidenceRetractedPayload,
 }
 
 

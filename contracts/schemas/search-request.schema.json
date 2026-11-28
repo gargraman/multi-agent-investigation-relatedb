@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "FindingKind": {
+      "description": "Finding kind (spec \u00a79.1, \u00a79.2): P0 folds \"Observation\" into Finding.",
+      "enum": [
+        "OBSERVATION",
+        "INFERENCE"
+      ],
+      "title": "FindingKind",
+      "type": "string"
+    },
+    "FindingStatus": {
+      "description": "Finding/Assessment lifecycle status (spec \u00a79.2, \u00a79.4).",
+      "enum": [
+        "ACTIVE",
+        "DISPUTED",
+        "SUPERSEDED",
+        "NEEDS_REVIEW"
+      ],
+      "title": "FindingStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Structured filter over committed findings; empty lists mean \"no filter\". The response is\nfiltered to the caller's clearance exactly as ``GET /context`` is (S4a spec \u00a78).",
+  "properties": {
+    "entity_ids": {
+      "items": {
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "type": "string"
+      },
+      "title": "Entity Ids",
+      "type": "array"
+    },
+    "investigation_id": {
+      "pattern": "^inv_[A-Za-z0-9_-]{1,64}$",
+      "title": "Investigation Id",
+      "type": "string"
+    },
+    "kinds": {
+      "items": {
+        "$ref": "#/$defs/FindingKind"
+      },
+      "title": "Kinds",
+      "type": "array"
+    },
+    "limit": {
+      "default": 200,
+      "maximum": 500,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "statuses": {
+      "items": {
+        "$ref": "#/$defs/FindingStatus"
+      },
+      "title": "Statuses",
+      "type": "array"
+    }
+  },
+  "required": [
+    "investigation_id"
+  ],
+  "title": "SearchRequest",
+  "type": "object"
+}

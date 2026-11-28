@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "finding_a": {
+      "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+      "title": "Finding A",
+      "type": "string"
+    },
+    "finding_b": {
+      "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+      "title": "Finding B",
+      "type": "string"
+    }
+  },
+  "required": [
+    "finding_a",
+    "finding_b"
+  ],
+  "title": "ContradictionPair",
+  "type": "object"
+}

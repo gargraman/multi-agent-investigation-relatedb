@@ -21,6 +21,7 @@ import json
 
 from pydantic import Field
 
+from nexus_contracts.api.assessments import Assessment
 from nexus_contracts.api.findings import Assertion
 from nexus_contracts.api.states import InvestigationStatus
 from nexus_contracts.common import (
@@ -193,3 +194,26 @@ class InvestigationContext(ValueModel):
     investigation_id: InvestigationId
     status: InvestigationStatus
     findings: list[ContextFinding] = Field(default_factory=list)
+    assessment: Assessment | None = Field(
+        default=None,
+        description="S4a: the investigation's current assessment, if one has been submitted.",
+    )
+
+
+# --- Search: POST /v1/investigations/{id}/search (S4a spec §8; clearance-filtered) ---
+
+
+class SearchRequest(ValueModel):
+    """Structured filter over committed findings; empty lists mean "no filter". The response is
+    filtered to the caller's clearance exactly as ``GET /context`` is (S4a spec §8)."""
+
+    investigation_id: InvestigationId
+    entity_ids: list[ManifestId] = Field(default_factory=list)
+    kinds: list[FindingKind] = Field(default_factory=list)
+    statuses: list[FindingStatus] = Field(default_factory=list)
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+class SearchResponse(ValueModel):
+    findings: list[ContextFinding]
+    truncated: bool = Field(description="True when more findings matched than ``limit``.")

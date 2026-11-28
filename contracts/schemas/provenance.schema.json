@@ -1,0 +1,117 @@
+{
+  "$defs": {
+    "Classification": {
+      "description": "Fictional demo classification levels (spec \u00a79.3).",
+      "enum": [
+        "DEMO-LOW",
+        "DEMO-MID",
+        "DEMO-HIGH"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "FindingStatus": {
+      "description": "Finding/Assessment lifecycle status (spec \u00a79.2, \u00a79.4).",
+      "enum": [
+        "ACTIVE",
+        "DISPUTED",
+        "SUPERSEDED",
+        "NEEDS_REVIEW"
+      ],
+      "title": "FindingStatus",
+      "type": "string"
+    },
+    "ProvenanceEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "owner_node_id": {
+          "title": "Owner Node Id",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ACTIVE",
+            "RETRACTED"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "sha256",
+        "owner_node_id",
+        "status"
+      ],
+      "title": "ProvenanceEvidence",
+      "type": "object"
+    },
+    "ProvenanceFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/ProvenanceEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "finding_id": {
+          "pattern": "^fnd_[A-Za-z0-9_-]{1,64}$",
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "source_agent_id": {
+          "title": "Source Agent Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/FindingStatus"
+        }
+      },
+      "required": [
+        "finding_id",
+        "source_agent_id",
+        "status",
+        "classification",
+        "evidence"
+      ],
+      "title": "ProvenanceFinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "assessment_id": {
+      "pattern": "^asm_[A-Za-z0-9_-]{1,64}$",
+      "title": "Assessment Id",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/ProvenanceFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "assessment_id",
+    "findings"
+  ],
+  "title": "Provenance",
+  "type": "object"
+}
