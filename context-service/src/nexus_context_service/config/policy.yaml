@@ -1,0 +1,15 @@
+callers:
+  orchestrator:
+    read: DEMO-HIGH
+    operations: [investigations.create, investigations.close, investigations.context,
+                 assessments.provenance, evidence.retract, entities.contradictions,
+                 investigations.links, investigations.graph, audit.read]
+  analysis-agent:
+    read: DEMO-MID
+    operations: [investigations.context, search, assessments.create]
+  sigint-agent:
+    write: DEMO-HIGH
+    operations: [findings.submit, entities.create]
+  geoint-agent:
+    write: DEMO-MID
+    operations: [findings.submit, entities.create]

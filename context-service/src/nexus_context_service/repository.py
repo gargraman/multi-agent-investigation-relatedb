@@ -48,7 +48,7 @@ from nexus_contracts.api.findings import (
 )
 from nexus_contracts.api.problem import FieldError
 from nexus_contracts.api.states import InvestigationStatus
-from nexus_contracts.common import EntityType
+from nexus_contracts.common import Classification, EntityType
 
 OPEN = "OPEN"
 CLOSED = "CLOSED"
@@ -331,7 +331,7 @@ class GraphRepository:
         return await self._lane.run("investigations.close", _tx)
 
     async def submit_finding_batch(
-        self, body: FindingBatchRequest, audit: AuditContext
+        self, body: FindingBatchRequest, audit: AuditContext, clearance: Classification | None
     ) -> BatchResult:
         """One lane transaction: replay check -> fence -> FR-041 validation -> writes -> audit."""
         inv = body.investigation_id
@@ -365,7 +365,7 @@ class GraphRepository:
                 r["evidence_id"]: dict(r)
                 for r in conn.execute(fq.GET_EVIDENCE, {"inv": inv, "evidence_ids": evidence_ids})
             }
-            check = validate_batch(body, caller, entity_types, evidence)
+            check = validate_batch(body, caller, entity_types, evidence, clearance)
             if not check.ok:
                 raise BatchInvalid(check.errors, check.integrity_error)
 

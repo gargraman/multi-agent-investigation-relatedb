@@ -22,6 +22,7 @@ from opentelemetry.sdk.trace.export import SpanExporter
 from nexus_context_service import __version__
 from nexus_context_service.errors import install_error_handlers
 from nexus_context_service.lane import RelateLane
+from nexus_context_service.policy import Policy
 from nexus_context_service.repository import GraphRepository
 from nexus_context_service.routes import router
 from nexus_context_service.settings import (
@@ -42,13 +43,14 @@ def create_app(
     token_registry: TokenRegistry | None = None,
     span_exporter: SpanExporter | None = None,
 ) -> FastAPI:
-    """Build the app. Config errors (store path, tokens, durability mode) raise here.
+    """Build the app. Config errors (store path, tokens, durability mode, policy) raise here.
 
     ``token_registry`` / ``span_exporter`` are test seams; production loads tokens from the
     environment and exports spans per ``OTEL_EXPORTER_OTLP_ENDPOINT``."""
     settings = settings or ContextServiceSettings()  # type: ignore[call-arg]
     assert_durability_full()
     registry = token_registry or load_token_registry()
+    policy = Policy.load(settings.policy_path)  # a malformed policy stops startup
 
     if span_exporter is not None:  # tests: a private provider, not the process-global one
         provider = build_tracer_provider(settings, span_exporter)
@@ -82,6 +84,7 @@ def create_app(
     )
     app.state.settings = settings
     app.state.token_registry = registry
+    app.state.policy = policy
     app.state.lane = lane
     app.state.repository = repository
     app.state.ready = False

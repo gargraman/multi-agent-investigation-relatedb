@@ -1,8 +1,7 @@
 """Caller authentication and the operation allowlist (spec §14.1, ADR-005 D4).
 
-S1 keeps the authorization matrix as an in-code table mirroring spec §14.1. It moves to
-``config/policy.yaml`` in a later slice (with classification clearance, which S1 does not need:
-no S1 endpoint returns classified records).
+The allowlist is ``policy.yaml`` (see :mod:`nexus_context_service.policy`), held on
+``app.state.policy``.
 """
 
 from __future__ import annotations
@@ -14,37 +13,11 @@ from fastapi import Request
 
 from nexus_context_service.errors import ProblemError
 from nexus_context_service.lane import LaneUnavailable
+from nexus_context_service.policy import Policy
 from nexus_context_service.repository import AuditContext, GraphRepository
-from nexus_shared.security import ACTOR_HEADER, ORCHESTRATOR, TokenRegistry, resolve_actor
+from nexus_shared.security import ACTOR_HEADER, TokenRegistry, resolve_actor
 
 log = logging.getLogger(__name__)
-
-SIGINT = "sigint-agent"
-GEOINT = "geoint-agent"
-ANALYSIS = "analysis-agent"
-
-# Operation -> callers allowed to perform it (spec §14.1 table, one row per operation).
-POLICY: dict[str, frozenset[str]] = {
-    "investigations.create": frozenset({ORCHESTRATOR}),
-    "investigations.close": frozenset({ORCHESTRATOR}),
-    # S2 (FR-044): orchestrator only. Analysis joins in S4 together with clearance filtering and
-    # the FILTERED audit event (spec §9.5); serving it unfiltered now would leak DEMO-HIGH.
-    "investigations.context": frozenset({ORCHESTRATOR}),
-    "assessments.provenance": frozenset({ORCHESTRATOR}),
-    "evidence.retract": frozenset({ORCHESTRATOR}),
-    "entities.contradictions": frozenset({ORCHESTRATOR}),
-    "investigations.links": frozenset({ORCHESTRATOR}),
-    "investigations.graph": frozenset({ORCHESTRATOR}),
-    "audit.read": frozenset({ORCHESTRATOR}),
-    "findings.submit": frozenset({SIGINT, GEOINT}),
-    "entities.create": frozenset({SIGINT, GEOINT}),
-    "search": frozenset({ANALYSIS}),
-    "assessments.create": frozenset({ANALYSIS}),
-}
-
-
-def is_allowed(caller: str, operation: str) -> bool:
-    return caller in POLICY.get(operation, frozenset())
 
 
 def authorize(operation: str) -> Callable[[Request], Awaitable[AuditContext]]:
@@ -60,7 +33,8 @@ def authorize(operation: str) -> Callable[[Request], Awaitable[AuditContext]]:
         audit = AuditContext(
             caller=caller, actor=resolve_actor(caller, request.headers.get(ACTOR_HEADER))
         )
-        if not is_allowed(caller, operation):
+        policy: Policy = request.app.state.policy
+        if not policy.allows(caller, operation):
             repo: GraphRepository = request.app.state.repository
             try:  # standalone denial audit (spec §14.4, ADR-002)
                 await repo.record_denial(audit, operation, request.path_params.get("id"))

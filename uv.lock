@@ -497,6 +497,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "nexus-contracts" },
     { name = "nexus-shared" },
+    { name = "pyyaml" },
     { name = "relate-db" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -506,6 +507,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.165.0" },
     { name = "nexus-contracts", editable = "contracts" },
     { name = "nexus-shared", editable = "shared" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "relate-db", specifier = "==1.2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]

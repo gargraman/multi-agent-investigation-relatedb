@@ -161,6 +161,7 @@ def _problem_doc(model: type, description: str) -> dict:
 )
 async def submit_findings(
     body: FindingBatchRequest,
+    request: Request,
     response: Response,
     audit: Annotated[AuditContext, Depends(authorize("findings.submit"))],
     repo: Annotated[GraphRepository, Depends(_repo)],
@@ -169,7 +170,9 @@ async def submit_findings(
     """S2 FR-040–FR-043: one lane transaction, idempotent on ``findings:{task_id}``. The replay
     check runs before the CLOSED fence (G15)."""
     try:
-        result = await repo.submit_finding_batch(body, audit)
+        result = await repo.submit_finding_batch(
+            body, audit, request.app.state.policy.write_clearance(audit.caller)
+        )
     except InvestigationNotFound as exc:
         raise ProblemError(404, "investigation not found") from exc
     except TaskOwnedByOtherCaller as exc:
