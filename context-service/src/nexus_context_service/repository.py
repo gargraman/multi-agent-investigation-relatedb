@@ -35,9 +35,11 @@ from opentelemetry import trace
 
 from nexus_context_service.assessments import (
     CitationRejected,
+    FindingFacts,
     assessment_hash,
     assessment_key,
     used_finding_ids,
+    validate_edge,
 )
 from nexus_context_service.ids import new_id
 from nexus_context_service.lane import LaneUnavailable, RelateLane
@@ -53,6 +55,8 @@ from nexus_contracts.api.assessments import (
     Assessment,
     AssessmentSubmission,
     AssessmentSubmissionResponse,
+    EdgeType,
+    ProposedEdge,
     RejectedEdge,
 )
 from nexus_contracts.api.context import (
@@ -74,7 +78,7 @@ from nexus_contracts.api.findings import (
 )
 from nexus_contracts.api.problem import FieldError
 from nexus_contracts.api.states import InvestigationStatus
-from nexus_contracts.common import Classification, EntityType
+from nexus_contracts.common import Classification, EntityType, FindingKind, FindingStatus
 
 if TYPE_CHECKING:  # scope.py imports this module (AuditContext); avoid the runtime cycle
     from nexus_context_service.scope import ReadScope
@@ -317,6 +321,49 @@ def _assemble_findings(
 
 
 _BODY_JSON_FIELDS = ("conclusions", "contradictions", "information_gaps", "follow_up_questions")
+
+
+def _apply_edges(
+    conn: relate.Connection,
+    edges: list[ProposedEdge],
+    receipt: dict[str, dict[str, Any]],
+    max_rank: int,
+    assessment_id: str,
+    now: str,
+) -> tuple[list[ProposedEdge], list[RejectedEdge]]:
+    """FR-213, in submission order (an edge sees the ones accepted before it, so a cycle can close
+    within one submission). Endpoints are checked against the receipt and the caller's rank, the
+    same test as the citation check. Called inside the assessment transaction."""
+    visible = {
+        fid: FindingFacts(kind=FindingKind(r["kind"]), status=FindingStatus(r["status"]))
+        for fid, r in receipt.items()
+        if r["classification_rank"] <= max_rank
+    }
+    accepted: list[ProposedEdge] = []
+    rejected: list[RejectedEdge] = []
+    for e in edges:
+        params = {"src": e.source_finding_id, "tgt": e.target_finding_id}
+        code = validate_edge(e, set(receipt), visible)
+        if (
+            code is None
+            and e.type is EdgeType.DERIVED_FROM
+            and conn.execute(aq_asm.DERIVED_FROM_CLOSES_CYCLE, params).single()["cycle"]
+        ):
+            code = ErrorCode.SCHEMA_INVALID
+        if code is not None:
+            rejected.append(RejectedEdge(edge=e, code=code))
+            continue
+        if not conn.execute(aq_asm.EDGE_PRESENT[e.type], params).single()["present"]:
+            _count(
+                conn,
+                aq_asm.EDGE_CREATE[e.type],
+                {**params, "assessment_id": assessment_id, "now": now},
+                1,
+            )
+        if e.type is EdgeType.CONTRADICTS:
+            conn.execute(aq_asm.DISPUTE_FINDINGS, {"ids": list(params.values())})
+        accepted.append(e)
+    return accepted, rejected
 
 
 def _body_json(body: AssessmentSubmission) -> str:
@@ -580,7 +627,11 @@ class GraphRepository:
            else ``CitationRejected``: the transaction rolls back and a ``DENIED`` audit event
            (target = investigation, no finding id) is written in its own lane run;
         5. ``NEEDS_REVIEW`` if any used finding is no longer trusted, else ``ACTIVE`` (FR-211a);
-        6. Submission, Assessment, BELONGS_TO, USES_FINDING, audit event CONCERNS Submission.
+        6. each proposed edge validated (FR-213) and, if accepted, written; each accepted
+           ``CONTRADICTS`` moves its ACTIVE endpoints to DISPUTED (version + 1); a rejected edge
+           never fails the assessment;
+        7. Submission (holding the response, edges included), Assessment, BELONGS_TO,
+           USES_FINDING, audit event CONCERNS Submission.
 
         Returns ``(response, created)``; ``created`` is False for a replay."""
         inv = body.investigation_id
@@ -619,14 +670,11 @@ class GraphRepository:
             now = _now()
             submission_id = new_id("sub")
             assessment_id = new_id("asm")
+            accepted, rejected = _apply_edges(
+                conn, body.proposed_edges, receipt, max_rank, assessment_id, now
+            )
             response = AssessmentSubmissionResponse(
-                assessment_id=assessment_id,
-                accepted_edges=[],
-                # Placeholder until edge validation (S4a Task 6): every proposed edge is
-                # rejected individually; the assessment itself still commits (§8.5).
-                rejected_edges=[
-                    RejectedEdge(edge=e, code=ErrorCode.SCHEMA_INVALID) for e in body.proposed_edges
-                ],
+                assessment_id=assessment_id, accepted_edges=accepted, rejected_edges=rejected
             )
             common = {
                 "inv": inv,

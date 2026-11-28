@@ -10,6 +10,11 @@ scalar fields (``summary``, ``model_id``, ``prompt_version``, ``schema_version``
 ``body_json``, the canonical JSON of ``conclusions``, ``contradictions``, ``information_gaps``
 and ``follow_up_questions``; ``(Assessment)-[:BELONGS_TO]->(Investigation)`` and one
 ``(Assessment)-[:USES_FINDING]->(Finding)`` per used id.
+
+Edges (FR-213): an accepted proposed edge is a ``(Finding)-[:CORROBORATES|CONTRADICTS|DERIVED_FROM
+{assessment_id, created_at}]->(Finding)`` relationship. A relationship type cannot be a Cypher
+parameter, so each type has its own constant, picked from the ``EDGE_*`` maps below by an
+``EdgeType`` the contract has already validated: no request text reaches a query.
 """
 
 # 1 + 2. Idempotency and fence in one read. The replay decision is taken before the fence (G15).
@@ -27,8 +32,8 @@ RETURN i.write_state AS write_state, s.content_hash AS content_hash,
 RECEIPT = """
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)<-[:RETURNED]-(a:AuditEvent)
 WHERE a.caller = $caller AND a.task_id = $task_id
-RETURN DISTINCT f.id AS id, f.status AS status, f.classification AS classification,
-       f.classification_rank AS classification_rank
+RETURN DISTINCT f.id AS id, f.kind AS kind, f.status AS status,
+       f.classification AS classification, f.classification_rank AS classification_rank
 """
 
 CREATE_SUBMISSION = """
@@ -58,4 +63,45 @@ UNWIND $finding_ids AS fid
 MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding {id: fid})
 CREATE (a)-[:USES_FINDING]->(f)
 RETURN count(*) AS created
+"""
+
+
+def _edge_queries() -> tuple[dict[str, str], dict[str, str]]:
+    """``(present, create)`` statements per edge type. ``CORROBORATES`` / ``CONTRADICTS`` are
+    compared undirected, ``DERIVED_FROM`` directed (FR-213)."""
+    present: dict[str, str] = {}
+    create: dict[str, str] = {}
+    for rel, arrow in (
+        ("CORROBORATES", "-"),
+        ("CONTRADICTS", "-"),
+        ("DERIVED_FROM", "->"),
+    ):
+        present[rel] = (
+            "MATCH (s:Finding {id: $src}), (t:Finding {id: $tgt}) "
+            f"RETURN EXISTS {{ (s)-[:{rel}]{arrow}(t) }} AS present"
+        )
+        create[rel] = (
+            "MATCH (s:Finding {id: $src}), (t:Finding {id: $tgt}) "
+            f"CREATE (s)-[:{rel} {{assessment_id: $assessment_id, created_at: $now}}]->(t) "
+            "RETURN count(*) AS created"
+        )
+    return present, create
+
+
+EDGE_PRESENT, EDGE_CREATE = _edge_queries()
+
+# Adding ``source -> target`` closes a ``DERIVED_FROM`` cycle iff ``target`` already reaches
+# ``source`` through ``DERIVED_FROM`` edges (including ones written earlier in this transaction).
+DERIVED_FROM_CLOSES_CYCLE = """
+MATCH (s:Finding {id: $src}), (t:Finding {id: $tgt})
+RETURN EXISTS { (t)-[:DERIVED_FROM]->+(s) } AS cycle
+"""
+
+# FR-213: each accepted CONTRADICTS moves ACTIVE findings to DISPUTED, version + 1. Any other
+# status (NEEDS_REVIEW, SUPERSEDED, already DISPUTED) fails the WHERE and is left untouched.
+DISPUTE_FINDINGS = """
+MATCH (f:Finding)
+WHERE f.id IN $ids AND f.status = 'ACTIVE'
+SET f.status = 'DISPUTED', f.version = f.version + 1
+RETURN count(f) AS changed
 """

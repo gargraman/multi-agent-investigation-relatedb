@@ -459,24 +459,6 @@ async def test_only_analysis_may_submit(
     assert (await _counts(app))["assessments"] == 0
 
 
-async def test_placeholder_rejects_every_proposed_edge(
-    client: httpx.AsyncClient, seeded: Seeded
-) -> None:
-    """Edge validation is Task 6; until then every proposed edge is rejected individually and
-    the assessment itself still commits (§8.5)."""
-    await retrieve(client)
-    body = assessment_body([seeded.f1, seeded.f2])
-    edge = {"type": "CORROBORATES", "source_finding_id": seeded.f1, "target_finding_id": seeded.f2}
-    body["proposed_edges"] = [edge]
-    resp = AssessmentSubmissionResponse.model_validate(
-        await _post_ok(client, URL, body, ANALYSIS_POST)
-    )
-    assert resp.accepted_edges == []
-    assert [(e.edge.model_dump(mode="json"), e.code) for e in resp.rejected_edges] == [
-        (edge, "schema_invalid")
-    ]
-
-
 # --- read model (FR-207) ------------------------------------------------------------------------
 
 
