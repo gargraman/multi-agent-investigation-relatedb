@@ -44,7 +44,7 @@ from nexus_contracts.api.findings import (
     FindingBatchRequest,
     FindingBatchResponse,
 )
-from nexus_contracts.api.graph import ContradictionPair, Provenance
+from nexus_contracts.api.graph import ContradictionPair, HiddenLink, Provenance
 from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
 from nexus_contracts.api.retraction import RetractEvidenceRequest, RetractionImpact
 from nexus_contracts.common import MANIFEST_ID_PATTERN, EntityType
@@ -405,3 +405,26 @@ async def entity_contradictions(
         )
     except EntityNotFound as exc:
         raise ProblemError(404, "entity not found") from exc
+
+
+@router.get(
+    "/v1/investigations/{id}/links",
+    response_model=list[HiddenLink],
+    responses={
+        403: _problem_doc(ProblemDetails, "caller not allowed"),
+        404: _problem_doc(ProblemDetails, "Unknown investigation"),
+    },
+)
+async def investigation_links(
+    id: Annotated[str, Path(pattern=INVESTIGATION_ID_PATTERN)],
+    request: Request,
+    audit: Annotated[AuditContext, Depends(authorize("investigations.links"))],
+    repo: Annotated[GraphRepository, Depends(_repo)],
+    _: Annotated[None, Depends(_require_ready)],
+) -> list[HiddenLink]:
+    """S4a FR-218 (I4): cross-agent hidden links, within the caller's clearance. A successful
+    read writes no audit event."""
+    try:
+        return await repo.links(id, request.app.state.policy.read_rank(audit.caller))
+    except InvestigationNotFound as exc:
+        raise ProblemError(404, "investigation not found") from exc

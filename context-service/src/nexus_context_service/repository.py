@@ -51,6 +51,7 @@ from nexus_context_service.queries import context as cq
 from nexus_context_service.queries import contradictions as xq
 from nexus_context_service.queries import findings as fq
 from nexus_context_service.queries import investigations as q
+from nexus_context_service.queries import links as lq
 from nexus_context_service.queries import provenance as pq
 from nexus_context_service.queries import retraction as rq
 from nexus_context_service.queries import search as sq
@@ -83,6 +84,8 @@ from nexus_contracts.api.findings import (
 )
 from nexus_contracts.api.graph import (
     ContradictionPair,
+    HiddenLink,
+    HiddenLinkWindow,
     Provenance,
     ProvenanceEvidence,
     ProvenanceFinding,
@@ -974,6 +977,42 @@ class GraphRepository:
             return [ContradictionPair(**r) for r in _rows(conn, xq.PAIRS, params)]
 
         return await self._lane.run("entities.contradictions", _tx)
+
+    async def links(self, investigation_id: str, max_rank: int) -> list[HiddenLink]:
+        """I4 / FR-218: the ADR-007 hidden-link query over this investigation, co-location radius
+        1.5 x its ``grid_pitch``, every finding it reads within ``max_rank`` and trusted. A
+        finding above ``max_rank`` is excluded from the whole computation (it appears nowhere and
+        suppresses nothing). Unknown investigation raises ``InvestigationNotFound``. Sorted by
+        ``(entity_a, via, entity_b)``; ids and windows sorted inside. No read audit (not in
+        FR-204's list)."""
+
+        def _tx(conn: relate.Connection) -> list[HiddenLink]:
+            pitch = _rows(conn, lq.GRID_PITCH, {"inv": investigation_id})
+            if not pitch:
+                raise InvestigationNotFound(investigation_id)
+            params = {
+                "inv": investigation_id,
+                "max_rank": max_rank,
+                "radius": 1.5 * pitch[0]["pitch"],
+            }
+            out = [
+                HiddenLink(
+                    entity_a=r["entity_a"],
+                    via=r["via"],
+                    entity_b=r["entity_b"],
+                    sigint_findings=sorted(r["sigint_findings"]),
+                    geoint_findings=sorted(r["geoint_findings"]),
+                    windows=sorted(
+                        (HiddenLinkWindow.model_validate(w) for w in r["windows"]),
+                        key=lambda w: (w.from_, w.until, w.cell_c, w.cell_b),
+                    ),
+                    disputed=r["disputed"],
+                )
+                for r in _rows(conn, lq.HIDDEN_LINKS, params)
+            ]
+            return sorted(out, key=lambda x: (x.entity_a, x.via, x.entity_b))
+
+        return await self._lane.run("investigations.links", _tx)
 
     async def record_denial(
         self, audit: AuditContext, operation: str, target_id: str | None
