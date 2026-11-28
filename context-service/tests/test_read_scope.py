@@ -136,7 +136,12 @@ async def test_analysis_context_body_never_mentions_hidden_id(
     assert r.status_code == 200
     for hidden in (seeded.high, seeded.untrusted_high):
         assert hidden not in r.text
-    rows = await read(app, "MATCH (a:AuditEvent {operation:'investigations.context'}) RETURN a")
+    # properties(a) yields a plain dict, so the blob really contains every stored property value
+    # (a bare node row would repr as an opaque Node object and make this assertion vacuous).
+    rows = await read(
+        app, "MATCH (a:AuditEvent {operation:'investigations.context'}) RETURN properties(a) AS p"
+    )
+    assert rows and "filtered_above_clearance" in rows[0]["p"]
     blob = repr(rows)
     assert seeded.high not in blob
     assert seeded.untrusted_high not in blob

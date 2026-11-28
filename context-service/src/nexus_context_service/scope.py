@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
@@ -18,13 +19,13 @@ from pydantic import TypeAdapter, ValidationError
 from nexus_context_service.auth import authorize
 from nexus_context_service.errors import ProblemError
 from nexus_context_service.policy import Policy
+from nexus_context_service.queries.context import TRUSTED_STATUSES
 from nexus_context_service.repository import AuditContext
 from nexus_contracts.api.errors import ErrorCode
 from nexus_contracts.common import TaskId
 from nexus_shared.security import TASK_ID_HEADER
 
 ANALYSIS_AGENT = "analysis-agent"
-TRUSTED_STATUSES = ("ACTIVE", "DISPUTED")
 
 _TASK_ID = TypeAdapter(TaskId)
 
@@ -35,6 +36,14 @@ class ReadScope:
     max_rank: int  # highest classification rank the caller may read
     trusted_only: bool  # True: only ACTIVE / DISPUTED findings are visible at all
     task_id: str | None  # receipt key; analysis-agent reads only
+
+    def query_params(self) -> dict[str, Any]:
+        """The parameters every scoped read query binds (``queries.context`` predicates)."""
+        return {
+            "max_rank": self.max_rank,
+            "trusted_only": self.trusted_only,
+            "trusted_statuses": TRUSTED_STATUSES,
+        }
 
 
 def read_scope(operation: str) -> Callable[[Request], Awaitable[ReadScope]]:

@@ -478,11 +478,7 @@ class GraphRepository:
         """Read model (FR-044) filtered by the caller's scope (S4a FR-202). The read and its
         audit event are one lane transaction (NFR-203); an unknown investigation raises
         ``InvestigationNotFound`` and rolls both back."""
-        params = {
-            "inv": investigation_id,
-            "max_rank": scope.max_rank,
-            "trusted_only": scope.trusted_only,
-        }
+        params = {"inv": investigation_id, **scope.query_params()}
 
         def _rows(conn: relate.Connection, cypher: str) -> list[dict[str, Any]]:
             return [dict(r) for r in conn.execute(cypher, params).fetchall()]

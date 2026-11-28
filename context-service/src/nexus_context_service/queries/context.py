@@ -4,14 +4,18 @@ Flat row queries assembled in Python (one read transaction on the lane), rather 
 collect subqueries: simpler to reason about on Relate and each query stays a plain pattern.
 
 Every query is filtered by the caller's read scope: ``$max_rank`` (clearance) and
-``$trusted_only`` (analysis reads see ACTIVE / DISPUTED findings only). The visibility predicate
-sits on the Finding in each, so a hidden finding's edges are hidden with it.
+``$trusted_only`` over ``$trusted_statuses`` (analysis reads see ACTIVE / DISPUTED findings only).
+The visibility predicate sits on the Finding in each, so a hidden finding's edges are hidden with
+it. The predicate is built from two fragments, rank and trust, so a count query can reuse the
+trust half without re-typing it; ``TRUSTED_STATUSES`` is the one place the trusted set is named.
 """
 
-_VISIBLE = (
-    "f.classification_rank <= $max_rank "
-    "AND (NOT $trusted_only OR f.status IN ['ACTIVE', 'DISPUTED'])"
-)
+TRUSTED_STATUSES = ["ACTIVE", "DISPUTED"]  # bound to ``$trusted_statuses`` by ``ReadScope``
+
+RANK_VISIBLE = "f.classification_rank <= $max_rank"
+RANK_HIDDEN = "f.classification_rank > $max_rank"
+TRUSTED = "(NOT $trusted_only OR f.status IN $trusted_statuses)"
+_VISIBLE = f"{RANK_VISIBLE} AND {TRUSTED}"
 
 
 def _scoped(cypher: str) -> str:
@@ -60,10 +64,9 @@ RETURN f.id AS fid, s.manifest_id AS subject, l.manifest_id AS location,
 
 # Findings the caller's clearance hides. The trusted filter applies first, so an untrusted
 # finding is never counted (S4a FR-205): it is "not visible", not "above clearance".
-COUNT_FILTERED = """
-MATCH (:Investigation {id: $inv})-[:CONTAINS]->(f:Finding)
-WHERE f.classification_rank > $max_rank
-  AND (NOT $trusted_only OR f.status IN ['ACTIVE', 'DISPUTED'])
+COUNT_FILTERED = f"""
+MATCH (:Investigation {{id: $inv}})-[:CONTAINS]->(f:Finding)
+WHERE {RANK_HIDDEN} AND {TRUSTED}
 RETURN count(f) AS filtered
 """
 
