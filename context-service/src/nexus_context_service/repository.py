@@ -50,6 +50,7 @@ from nexus_context_service.queries import audit as aq
 from nexus_context_service.queries import context as cq
 from nexus_context_service.queries import contradictions as xq
 from nexus_context_service.queries import findings as fq
+from nexus_context_service.queries import graph as gq
 from nexus_context_service.queries import investigations as q
 from nexus_context_service.queries import links as lq
 from nexus_context_service.queries import provenance as pq
@@ -84,6 +85,10 @@ from nexus_contracts.api.findings import (
 )
 from nexus_contracts.api.graph import (
     ContradictionPair,
+    Graph,
+    GraphEdge,
+    GraphNode,
+    GraphNodeLabel,
     HiddenLink,
     HiddenLinkWindow,
     Provenance,
@@ -322,6 +327,11 @@ def _get(conn: relate.Connection, investigation_id: str) -> dict[str, Any] | Non
 
 def _rows(conn: relate.Connection, cypher: str, params: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(r) for r in conn.execute(cypher, params).fetchall()]
+
+
+def _scalar(value: Any) -> Any:
+    """A stored property as a graph ``props`` scalar: temporals become ISO-8601 strings."""
+    return value.isoformat() if isinstance(value, datetime) else value
 
 
 def _assemble_findings(
@@ -915,6 +925,48 @@ class GraphRepository:
             )
 
         return await self._lane.run("search", _tx)
+
+    async def graph(self, investigation_id: str, scope: ReadScope) -> Graph:
+        """I6 / FR-219: the investigation's nodes and edges within the caller's scope. Findings
+        and assessments above ``scope.max_rank`` are dropped with their assertions and edges
+        and only *counted* (hidden findings plus hidden assessments) in the read's audit event
+        (FR-204, NFR-202). The read and the audit event are one lane transaction; an unknown
+        investigation raises ``InvestigationNotFound`` and rolls both back."""
+        params = {"inv": investigation_id, **scope.query_params()}
+
+        def _tx(conn: relate.Connection) -> Graph:
+            if _get(conn, investigation_id) is None:
+                raise InvestigationNotFound(investigation_id)
+            nodes = [
+                GraphNode(
+                    id=row.pop("id"),
+                    label=GraphNodeLabel(label),
+                    props={k: _scalar(v) for k, v in row.items()},
+                )
+                for label, cypher in gq.NODE_QUERIES.items()
+                for row in _rows(conn, cypher, params)
+            ]
+            edges = [
+                GraphEdge(**row)
+                for cypher in gq.EDGE_QUERIES
+                for row in _rows(conn, cypher, params)
+            ]
+            filtered = (
+                conn.execute(gq.COUNT_HIDDEN_FINDINGS, params).single()["filtered"]
+                + conn.execute(gq.COUNT_HIDDEN_ASSESSMENTS, params).single()["filtered"]
+            )
+            _write_read_audit(
+                conn,
+                scope,
+                operation="investigations.graph",
+                investigation_id=investigation_id,
+                filtered=filtered,
+                returned_ids=[],  # receipts are for analysis reads of findings only
+                now=_now(),
+            )
+            return Graph(nodes=nodes, edges=edges)
+
+        return await self._lane.run("investigations.graph", _tx)
 
     async def provenance(self, assessment_id: str, max_rank: int) -> Provenance:
         """I1 / FR-215: the assessment's findings and their evidence, scoped to the assessment's

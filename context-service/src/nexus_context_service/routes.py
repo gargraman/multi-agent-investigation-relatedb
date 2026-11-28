@@ -44,7 +44,7 @@ from nexus_contracts.api.findings import (
     FindingBatchRequest,
     FindingBatchResponse,
 )
-from nexus_contracts.api.graph import ContradictionPair, HiddenLink, Provenance
+from nexus_contracts.api.graph import ContradictionPair, Graph, HiddenLink, Provenance
 from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
 from nexus_contracts.api.retraction import RetractEvidenceRequest, RetractionImpact
 from nexus_contracts.common import MANIFEST_ID_PATTERN, EntityType
@@ -426,5 +426,27 @@ async def investigation_links(
     read writes no audit event."""
     try:
         return await repo.links(id, request.app.state.policy.read_rank(audit.caller))
+    except InvestigationNotFound as exc:
+        raise ProblemError(404, "investigation not found") from exc
+
+
+@router.get(
+    "/v1/investigations/{id}/graph",
+    response_model=Graph,
+    responses={
+        403: _problem_doc(ProblemDetails, "caller not allowed"),
+        404: _problem_doc(ProblemDetails, "Unknown investigation"),
+    },
+)
+async def investigation_graph(
+    id: Annotated[str, Path(pattern=INVESTIGATION_ID_PATTERN)],
+    scope: Annotated[ReadScope, Depends(read_scope("investigations.graph"))],
+    repo: Annotated[GraphRepository, Depends(_repo)],
+    _: Annotated[None, Depends(_require_ready)],
+) -> Graph:
+    """S4a FR-219 (I6): the knowledge-graph view within the caller's clearance. Writes one read
+    audit event (FR-204): ``FILTERED`` with the hidden count when anything was dropped."""
+    try:
+        return await repo.graph(id, scope)
     except InvestigationNotFound as exc:
         raise ProblemError(404, "investigation not found") from exc
