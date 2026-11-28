@@ -13,6 +13,11 @@ finding / assessment, so a hidden node is dropped together with its assertions a
 is anchored on the investigation (``HAS_ENTITY`` / ``HAS_EVIDENCE`` / ``CONTAINS`` /
 ``BELONGS_TO``), so nodes of another investigation never appear.
 
+Only findings and assessments are clearance-filtered and counted (FR-219). ``Evidence`` nodes
+carry no ``classification_rank``, so they are neither filtered nor counted; this is acceptable
+because the endpoint is orchestrator-only (G7), and an evidence node exposes only its manifest
+id, classification label and status.
+
 Node queries return ``id`` plus the whitelist columns; edge queries return ``source``,
 ``target`` (node ids) and ``type``.
 """
