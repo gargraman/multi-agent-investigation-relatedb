@@ -38,7 +38,6 @@ from .test_read_scope import ANALYSIS, ANALYSIS_TOKEN, TASK
 
 INV = "inv_search"
 SEARCH = "/v1/search"
-SEARCH_IN_INV = f"/v1/investigations/{INV}/search"
 
 
 @dataclass
@@ -374,25 +373,3 @@ async def test_search_unknown_investigation_404(client: httpx.AsyncClient, app: 
 async def test_search_requires_auth(client: httpx.AsyncClient, seeded: Seeded) -> None:
     r = await client.post(SEARCH, json=_body())
     assert r.status_code == 401
-
-
-# --- path form -------------------------------------------------------------------------------
-
-
-async def test_search_in_investigation_path(
-    client: httpx.AsyncClient, app: FastAPI, seeded: Seeded
-) -> None:
-    r = await client.post(SEARCH_IN_INV, json=_body(kinds=["INFERENCE"]), headers=ANALYSIS)
-    assert _ids(r) == {seeded.mid_inf}
-    assert len(await _audit_rows(app)) == 1
-
-
-async def test_search_body_investigation_must_match_path(
-    client: httpx.AsyncClient, app: FastAPI, seeded: Seeded
-) -> None:
-    await _seed_investigation(client, "inv_other")
-    # Body names another (existing) investigation: never searched, never audited.
-    r = await client.post(SEARCH_IN_INV, json={"investigation_id": "inv_other"}, headers=ANALYSIS)
-    assert r.status_code == 400, r.text
-    assert ProblemDetails.model_validate(r.json()).code == "schema_invalid"
-    assert await _audit_rows(app) == []

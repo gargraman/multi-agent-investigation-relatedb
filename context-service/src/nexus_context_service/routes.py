@@ -224,24 +224,14 @@ async def investigation_context(
         raise ProblemError(404, "investigation not found") from exc
 
 
-_SEARCH_RESPONSES = {
-    400: _problem_doc(
-        ProblemDetails,
-        "analysis-agent read without a valid X-Nexus-Task-Id, or body investigation_id differs "
-        "from the path investigation",
-    ),
-    404: _problem_doc(ProblemDetails, "Unknown investigation"),
-}
-
-
-async def _search(body: SearchRequest, scope: ReadScope, repo: GraphRepository) -> SearchResponse:
-    try:
-        return await repo.search(body, scope)
-    except InvestigationNotFound as exc:
-        raise ProblemError(404, "investigation not found") from exc
-
-
-@router.post("/v1/search", response_model=SearchResponse, responses=_SEARCH_RESPONSES)
+@router.post(
+    "/v1/search",
+    response_model=SearchResponse,
+    responses={
+        400: _problem_doc(ProblemDetails, "analysis-agent read without a valid X-Nexus-Task-Id"),
+        404: _problem_doc(ProblemDetails, "Unknown investigation"),
+    },
+)
 async def search(
     body: SearchRequest,
     scope: Annotated[ReadScope, Depends(read_scope("search"))],
@@ -249,25 +239,7 @@ async def search(
     _: Annotated[None, Depends(_require_ready)],
 ) -> SearchResponse:
     """S4a FR-208: structured, clearance-filtered search of one investigation's findings."""
-    return await _search(body, scope, repo)
-
-
-@router.post(
-    "/v1/investigations/{id}/search", response_model=SearchResponse, responses=_SEARCH_RESPONSES
-)
-async def search_in_investigation(
-    id: Annotated[str, Path(pattern=INVESTIGATION_ID_PATTERN)],
-    body: SearchRequest,
-    scope: Annotated[ReadScope, Depends(read_scope("search"))],
-    repo: Annotated[GraphRepository, Depends(_repo)],
-    _: Annotated[None, Depends(_require_ready)],
-) -> SearchResponse:
-    """The same search addressed by path. The body's ``investigation_id`` must be this path's
-    investigation: a mismatch is rejected rather than silently searching the body's one."""
-    if body.investigation_id != id:
-        raise ProblemError(
-            400,
-            "body investigation_id does not match the path investigation",
-            code=ErrorCode.SCHEMA_INVALID,
-        )
-    return await _search(body, scope, repo)
+    try:
+        return await repo.search(body, scope)
+    except InvestigationNotFound as exc:
+        raise ProblemError(404, "investigation not found") from exc

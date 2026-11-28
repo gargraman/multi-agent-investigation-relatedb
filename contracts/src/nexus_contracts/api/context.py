@@ -200,7 +200,7 @@ class InvestigationContext(ValueModel):
     )
 
 
-# --- Search: POST /v1/investigations/{id}/search (S4a spec §8; clearance-filtered) ---
+# --- Search: POST /v1/search (S4a spec §8; clearance-filtered) ---
 
 
 class SearchRequest(ValueModel):
