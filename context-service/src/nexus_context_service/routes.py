@@ -3,6 +3,7 @@ and the investigation context read model. S4a: search and assessment submission.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Request, Response
@@ -11,11 +12,14 @@ from fastapi.responses import JSONResponse
 from nexus_context_service.assessments import CitationRejected
 from nexus_context_service.auth import authorize
 from nexus_context_service.errors import ProblemError
+from nexus_context_service.lane import LaneUnavailable
 from nexus_context_service.repository import (
     AlreadyCommitted,
     AssessmentAlreadyCommitted,
+    AssessmentNotFound,
     AuditContext,
     BatchInvalid,
+    EntityNotFound,
     EvidenceNotFound,
     GraphRepository,
     InvestigationClosed,
@@ -40,13 +44,16 @@ from nexus_contracts.api.findings import (
     FindingBatchRequest,
     FindingBatchResponse,
 )
+from nexus_contracts.api.graph import ContradictionPair, Provenance
 from nexus_contracts.api.problem import PROBLEM_JSON_MEDIA_TYPE, FieldError, ProblemDetails
 from nexus_contracts.api.retraction import RetractEvidenceRequest, RetractionImpact
 from nexus_contracts.common import MANIFEST_ID_PATTERN, EntityType
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 INVESTIGATION_ID_PATTERN = r"^inv_[A-Za-z0-9_-]{1,64}$"
+ASSESSMENT_ID_PATTERN = r"^asm_[A-Za-z0-9_-]{1,64}$"
 
 
 def _repo(request: Request) -> GraphRepository:
@@ -340,3 +347,61 @@ async def retract_evidence(
     if not created:
         response.status_code = 200
     return impact
+
+
+@router.get(
+    "/v1/assessments/{assessment_id}/provenance",
+    response_model=Provenance,
+    responses={
+        403: _problem_doc(ProblemDetails, "caller not allowed"),
+        404: _problem_doc(
+            ProblemDetails, "Unknown assessment, or one above the caller's clearance"
+        ),
+    },
+)
+async def assessment_provenance(
+    assessment_id: Annotated[str, Path(pattern=ASSESSMENT_ID_PATTERN)],
+    request: Request,
+    audit: Annotated[AuditContext, Depends(authorize("assessments.provenance"))],
+    repo: Annotated[GraphRepository, Depends(_repo)],
+    _: Annotated[None, Depends(_require_ready)],
+) -> Provenance:
+    """S4a FR-215 (I1). Above clearance is the same 404 as unknown (§9.5), plus a ``DENIED``
+    audit event in its own lane run. A successful read writes no audit event."""
+    try:
+        return await repo.provenance(
+            assessment_id, request.app.state.policy.read_rank(audit.caller)
+        )
+    except AssessmentNotFound as exc:
+        if exc.hidden:
+            try:  # the read transaction rolled back with the raise: audit in its own run
+                await repo.record_denial(audit, "assessments.provenance", exc.investigation_id)
+            except LaneUnavailable:
+                log.warning("denial not audited: store not ready", extra={"op": "provenance"})
+        raise ProblemError(404, "assessment not found") from exc
+
+
+@router.get(
+    "/v1/investigations/{id}/entities/{entity_id}/contradictions",
+    response_model=list[ContradictionPair],
+    responses={
+        403: _problem_doc(ProblemDetails, "caller not allowed"),
+        404: _problem_doc(ProblemDetails, "Unknown investigation or entity"),
+    },
+)
+async def entity_contradictions(
+    id: Annotated[str, Path(pattern=INVESTIGATION_ID_PATTERN)],
+    entity_id: Annotated[str, Path(pattern=MANIFEST_ID_PATTERN, max_length=128)],
+    request: Request,
+    audit: Annotated[AuditContext, Depends(authorize("entities.contradictions"))],
+    repo: Annotated[GraphRepository, Depends(_repo)],
+    _: Annotated[None, Depends(_require_ready)],
+) -> list[ContradictionPair]:
+    """S4a FR-217 (I3): each contradicting pair once, lower id first, both within clearance.
+    A successful read writes no audit event."""
+    try:
+        return await repo.contradictions(
+            id, entity_id, request.app.state.policy.read_rank(audit.caller)
+        )
+    except EntityNotFound as exc:
+        raise ProblemError(404, "entity not found") from exc

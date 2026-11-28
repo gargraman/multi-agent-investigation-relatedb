@@ -48,8 +48,10 @@ from nexus_context_service.lane import LaneUnavailable, RelateLane
 from nexus_context_service.queries import assessments as aq_asm
 from nexus_context_service.queries import audit as aq
 from nexus_context_service.queries import context as cq
+from nexus_context_service.queries import contradictions as xq
 from nexus_context_service.queries import findings as fq
 from nexus_context_service.queries import investigations as q
+from nexus_context_service.queries import provenance as pq
 from nexus_context_service.queries import retraction as rq
 from nexus_context_service.queries import search as sq
 from nexus_context_service.queries.schema import SCHEMA_DDL
@@ -78,6 +80,12 @@ from nexus_contracts.api.findings import (
     FindingBatchRequest,
     LinkedToAssertion,
     PlacedAtAssertion,
+)
+from nexus_contracts.api.graph import (
+    ContradictionPair,
+    Provenance,
+    ProvenanceEvidence,
+    ProvenanceFinding,
 )
 from nexus_contracts.api.problem import FieldError
 from nexus_contracts.api.retraction import RetractionImpact
@@ -123,6 +131,24 @@ class AssessmentAlreadyCommitted(Exception):
 
 class EvidenceNotFound(Exception):
     """No such evidence in this investigation (the id is investigation-scoped)."""
+
+
+class AssessmentNotFound(Exception):
+    """No such assessment, or one above the caller's clearance. The two are indistinguishable to
+    the caller (404, §9.5); ``investigation_id`` is set only for the hidden case, so the route can
+    audit the denial against the investigation without naming the hidden record."""
+
+    def __init__(self, investigation_id: str | None = None) -> None:
+        super().__init__("assessment not found")
+        self.investigation_id = investigation_id
+
+    @property
+    def hidden(self) -> bool:
+        return self.investigation_id is not None
+
+
+class EntityNotFound(Exception):
+    """No such entity in this investigation (or no such investigation)."""
 
 
 class TaskOwnedByOtherCaller(Exception):
@@ -886,6 +912,68 @@ class GraphRepository:
             )
 
         return await self._lane.run("search", _tx)
+
+    async def provenance(self, assessment_id: str, max_rank: int) -> Provenance:
+        """I1 / FR-215: the assessment's findings and their evidence, scoped to the assessment's
+        own investigation and to ``max_rank``. Unknown, or the assessment's own
+        ``classification_rank`` above ``max_rank``, raises ``AssessmentNotFound`` (the hidden case
+        carries the investigation id for the route's ``DENIED`` audit). A trail, not a trusted
+        read: retracted evidence and ``NEEDS_REVIEW`` findings are returned with their status.
+        No read audit (not in FR-204's list)."""
+        params = {"id": assessment_id, "max_rank": max_rank}
+
+        def _tx(conn: relate.Connection) -> Provenance:
+            rows = _rows(conn, pq.HEAD, params)
+            if not rows:
+                raise AssessmentNotFound()
+            head = rows[0]
+            if head["investigation_id"] is None:  # BELONGS_TO is written with every assessment
+                raise RuntimeError(f"assessment {assessment_id} belongs to no investigation")
+            if head["rank"] > max_rank:
+                raise AssessmentNotFound(head["investigation_id"])
+            findings: dict[str, ProvenanceFinding] = {}
+            for r in _rows(conn, pq.TRAIL, {**params, "inv": head["investigation_id"]}):
+                f = findings.setdefault(
+                    r["finding_id"],
+                    ProvenanceFinding(
+                        finding_id=r["finding_id"],
+                        source_agent_id=r["source_agent_id"],
+                        status=FindingStatus(r["status"]),
+                        classification=Classification(r["classification"]),
+                        evidence=[],
+                    ),
+                )
+                if r["evidence_id"] is not None:
+                    f.evidence.append(
+                        ProvenanceEvidence(
+                            evidence_id=r["evidence_id"],
+                            sha256=r["sha256"],
+                            owner_node_id=r["owner_node_id"],
+                            status=r["evidence_status"],
+                        )
+                    )
+            return Provenance(assessment_id=assessment_id, findings=list(findings.values()))
+
+        return await self._lane.run("assessments.provenance", _tx)
+
+    async def contradictions(
+        self, investigation_id: str, entity_id: str, max_rank: int
+    ) -> list[ContradictionPair]:
+        """I3 / FR-217: every ``CONTRADICTS`` pair between findings both ``ABOUT`` the entity,
+        once, lower id first, both within ``max_rank``. Unknown entity (or investigation) raises
+        ``EntityNotFound``. No read audit (not in FR-204's list)."""
+        params = {
+            "inv": investigation_id,
+            "uid": f"{investigation_id}:{entity_id}",
+            "max_rank": max_rank,
+        }
+
+        def _tx(conn: relate.Connection) -> list[ContradictionPair]:
+            if conn.execute(xq.ENTITY_EXISTS, params).single()["n"] == 0:
+                raise EntityNotFound(params["uid"])
+            return [ContradictionPair(**r) for r in _rows(conn, xq.PAIRS, params)]
+
+        return await self._lane.run("entities.contradictions", _tx)
 
     async def record_denial(
         self, audit: AuditContext, operation: str, target_id: str | None
