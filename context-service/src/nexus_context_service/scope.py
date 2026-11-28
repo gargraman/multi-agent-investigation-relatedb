@@ -42,7 +42,7 @@ class ReadScope:
         return {
             "max_rank": self.max_rank,
             "trusted_only": self.trusted_only,
-            "trusted_statuses": TRUSTED_STATUSES,
+            "trusted_statuses": list(TRUSTED_STATUSES),
         }
 
 

@@ -207,8 +207,8 @@ async def test_search_filters_and_or(wide_client: httpx.AsyncClient, wide_seeded
 async def test_search_rows_equal_context_rows(
     wide_client: httpx.AsyncClient, wide_seeded: Seeded
 ) -> None:
-    client = wide_client
     """Search assembles findings exactly as /context does (one shared assembly helper)."""
+    client = wide_client
     ctx = InvestigationContext.model_validate(
         (await client.get(f"/v1/investigations/{INV}/context", headers=ORCH)).json()
     )

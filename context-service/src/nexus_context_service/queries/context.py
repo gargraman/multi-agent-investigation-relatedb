@@ -13,7 +13,7 @@ it. The predicate is built from two fragments, rank and trust, so a count query 
 trust half without re-typing it; ``TRUSTED_STATUSES`` is the one place the trusted set is named.
 """
 
-TRUSTED_STATUSES = ["ACTIVE", "DISPUTED"]  # bound to ``$trusted_statuses`` by ``ReadScope``
+TRUSTED_STATUSES = ("ACTIVE", "DISPUTED")  # bound to ``$trusted_statuses`` by ``ReadScope``
 
 RANK_VISIBLE = "f.classification_rank <= $max_rank"
 RANK_HIDDEN = "f.classification_rank > $max_rank"
