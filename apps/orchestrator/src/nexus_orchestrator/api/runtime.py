@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import Request
 from opentelemetry.trace import Tracer
 
+from nexus_orchestrator.clock import Clock, SystemClock
 from nexus_orchestrator.delegation.agent_client import AgentClient
 from nexus_orchestrator.delegation.agent_registry import AgentRegistry
 from nexus_orchestrator.delegation.context_client import ContextServiceClient
@@ -40,6 +41,7 @@ class Runtime:
     reconciler: CloseReconciler
     sweep_done: bool = False
     shutting_down: bool = False
+    clock: Clock = field(default_factory=SystemClock)
 
     @property
     def ready(self) -> bool:

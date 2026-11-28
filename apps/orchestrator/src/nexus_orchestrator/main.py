@@ -127,6 +127,7 @@ def create_app(
         fence,
         tracer,
         reconciler,
+        clock=clock,
     )
 
     @asynccontextmanager
