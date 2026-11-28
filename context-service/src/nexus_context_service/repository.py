@@ -570,9 +570,11 @@ class GraphRepository:
     ) -> tuple[AssessmentSubmissionResponse, bool]:
         """FR-209..212 in one lane transaction, in this order (the order is the decision):
 
-        1. investigation exists and is OPEN;
+        1. investigation exists;
         2. idempotency: same key + hash replays the stored response, different hash is a 409
-           (checked **before** citations, so a replay after a retraction still returns 200);
+           (checked **before** the CLOSED fence, as the findings batch does (S2 G15), so a retry
+           after close learns its assessment_id; and before citations, so a replay after a
+           retraction still returns 200); then the investigation must be OPEN;
         3. the task's retrieval receipt within this investigation;
         4. every used id in the receipt and within ``max_rank`` (the caller's read clearance),
            else ``CitationRejected``: the transaction rolls back and a ``DENIED`` audit event
@@ -591,13 +593,13 @@ class GraphRepository:
             if not rows:
                 raise InvestigationNotFound(inv)
             head = dict(rows[0])
-            if head["write_state"] == CLOSED:
-                raise InvestigationClosed(inv)
-            if head["response_json"] is not None:
+            if head["response_json"] is not None:  # replay decided before the fence (G15)
                 if head["content_hash"] == content_hash:
                     stored = AssessmentSubmissionResponse.model_validate_json(head["response_json"])
                     return stored, False
                 raise AssessmentAlreadyCommitted(head["assessment_id"])
+            if head["write_state"] == CLOSED:
+                raise InvestigationClosed(inv)
 
             receipt = {
                 r["id"]: r

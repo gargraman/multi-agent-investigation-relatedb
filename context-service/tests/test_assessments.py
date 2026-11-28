@@ -383,6 +383,25 @@ async def test_closed_investigation_409(
     assert await _counts(app) == {"assessments": 0, "submissions": 0, "audits": 0}
 
 
+async def test_replay_after_close_returns_original(
+    client: httpx.AsyncClient, app: FastAPI, seeded: Seeded
+) -> None:
+    """FR-210 "as the findings batch" (S2 G15): the replay check runs before the CLOSED fence, so
+    a retry after close learns its committed assessment_id."""
+    await retrieve(client)
+    body = assessment_body([seeded.f1])
+    first = await _post_ok(client, URL, body, ANALYSIS_POST)
+    r = await client.post(
+        f"/v1/investigations/{INV}/close", json={"status": "CANCELLED"}, headers=ORCH
+    )
+    assert r.status_code == 200
+    snapshot = await _counts(app)
+    r = await client.post(URL, json={**body, "attempt": 2}, headers=ANALYSIS_POST)
+    assert r.status_code == 200, r.text
+    assert r.json() == first
+    assert await _counts(app) == snapshot
+
+
 async def test_unknown_investigation_404(client: httpx.AsyncClient, seeded: Seeded) -> None:
     r = await client.post(
         URL, json=assessment_body([seeded.f1], inv="inv_nope"), headers=ANALYSIS_POST

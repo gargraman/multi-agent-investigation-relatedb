@@ -1,7 +1,7 @@
 """``POST /v1/assessments`` Cypher (S4a FR-209..212, FR-211a).
 
 All statements run inside **one** lane transaction, in the order the repository documents:
-fence -> idempotency -> receipt -> writes. A citation miss raises inside the transaction (rolling
+idempotency -> fence -> receipt -> writes. A citation miss raises inside the transaction (rolling
 everything back); the ``DENIED`` audit event is then written in its own lane run.
 
 Storage shape (read back by ``queries.context.ASSESSMENT``): an ``Assessment`` node holding the
@@ -12,7 +12,7 @@ and ``follow_up_questions``; ``(Assessment)-[:BELONGS_TO]->(Investigation)`` and
 ``(Assessment)-[:USES_FINDING]->(Finding)`` per used id.
 """
 
-# 1 + 2. Fence and idempotency in one read. The repository checks the fence first.
+# 1 + 2. Idempotency and fence in one read. The replay decision is taken before the fence (G15).
 CHECK_SUBMISSION = """
 MATCH (i:Investigation {id: $inv})
 OPTIONAL MATCH (s:Submission {idempotency_key: $key})
