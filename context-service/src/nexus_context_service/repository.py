@@ -239,6 +239,10 @@ def _write_read_audit(
     never their ids (NFR-202). When the scope carries a task id (analysis reads) the event also
     links ``RETURNED`` to each finding handed back: the retrieval receipt assessments cite."""
     audit_id = f"aud_{uuid.uuid4().hex}"
+    outcome = "FILTERED" if filtered else "SUCCESS"
+    span = trace.get_current_span()  # S4a §12: outcome and count only, never ids
+    span.set_attribute("nexus.audit.outcome", outcome)
+    span.set_attribute("nexus.filtered_above_clearance", filtered)
     conn.execute(
         aq.CREATE_READ_AUDIT_EVENT,
         {
@@ -247,7 +251,7 @@ def _write_read_audit(
             "actor": scope.audit.actor,
             "operation": operation,
             "target_id": investigation_id,
-            "outcome": "FILTERED" if filtered else "SUCCESS",
+            "outcome": outcome,
             "now": now,
             "trace_id": _trace_id(),
             "filtered": filtered,
@@ -376,7 +380,7 @@ def _apply_edges(
     receipt: dict[str, dict[str, Any]],
     max_rank: int,
     assessment_id: str,
-    now: str,
+    now: datetime,
 ) -> tuple[list[ProposedEdge], list[RejectedEdge]]:
     """FR-213, in submission order (an edge sees the ones accepted before it, so a cycle can close
     within one submission). Endpoints are checked against the receipt and the caller's rank, the
@@ -720,6 +724,7 @@ class GraphRepository:
             accepted, rejected = _apply_edges(
                 conn, body.proposed_edges, receipt, max_rank, assessment_id, now
             )
+            trace.get_current_span().set_attribute("nexus.assessment.rejected_edges", len(rejected))
             response = AssessmentSubmissionResponse(
                 assessment_id=assessment_id, accepted_edges=accepted, rejected_edges=rejected
             )
